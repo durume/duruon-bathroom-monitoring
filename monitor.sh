@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# BathGuard Monitoring Script
-# This script provides real-time monitoring and health checks for BathGuard
+# DuruOn Monitoring Script
+# This script provides real-time monitoring and health checks for DuruOn
 
 set -e
 
@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🔍 BathGuard Monitor v1.1${NC}"
+echo -e "${BLUE}🔍 DuruOn Monitor v1.1${NC}"
 echo "================================"
 
 function show_status() {
@@ -53,9 +53,9 @@ function health_check() {
     
     # Check if process is using camera
     if sudo lsof /dev/video* 2>/dev/null | grep -q bathguard; then
-        echo -e "  ✅ Camera Use: ${GREEN}BathGuard has camera access${NC}"
+        echo -e "  ✅ Camera Use: ${GREEN}DuruOn has camera access${NC}"
     else
-        echo -e "  ⚠️  Camera Use: ${YELLOW}Camera not in use by BathGuard${NC}"
+        echo -e "  ⚠️  Camera Use: ${YELLOW}Camera not in use by DuruOn${NC}"
     fi
     
     # Check config file
@@ -141,18 +141,18 @@ case "${1:-help}" in
         show_performance
         ;;
     "restart")
-        echo -e "${YELLOW}🔄 Restarting BathGuard...${NC}"
+        echo -e "${YELLOW}🔄 Restarting DuruOn...${NC}"
         sudo systemctl restart bathguard
         sleep 2
         show_status
         ;;
     "stop")
-        echo -e "${YELLOW}🛑 Stopping BathGuard...${NC}"
+        echo -e "${YELLOW}🛑 Stopping DuruOn...${NC}"
         sudo systemctl stop bathguard
         show_status
         ;;
     "start")
-        echo -e "${GREEN}🚀 Starting BathGuard...${NC}"
+        echo -e "${GREEN}🚀 Starting DuruOn...${NC}"
         sudo systemctl start bathguard
         sleep 2
         show_status

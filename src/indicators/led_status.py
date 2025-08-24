@@ -1,5 +1,5 @@
 """
-LED Status Indicators for DuruOn (formerly BathGuard)
+LED Status Indicators for DuruOn
 Visual feedback for PIR sensor and monitoring status
 """
 

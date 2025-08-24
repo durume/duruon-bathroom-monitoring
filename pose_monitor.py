@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BathGuard Real-time Pose Monitor - FIXED VERSION
+DuruOn Real-time Pose Monitor - FIXED VERSION
 Shows live pose detection data in a user-friendly format
 """
 import time
@@ -14,7 +14,7 @@ class PoseMonitor:
         self.last_data = {}
         
     def parse_log_line(self, line):
-        """Parse BathGuard log lines"""
+        """Parse DuruOn log lines"""
         timestamp = datetime.now().strftime('%H:%M:%S')
         
         # Parse ACTIVE logs with pose data
@@ -79,7 +79,7 @@ class PoseMonitor:
     def display_status(self, data):
         """Display current pose status"""
         print("\033[2J\033[H", end="")  # Clear screen and move cursor to top
-        print("🚿 BathGuard Real-time Pose Monitor - FIXED")
+        print("🚿 DuruOn Real-time Pose Monitor - FIXED")
         print("=" * 50)
         print(f"⏰ Last Update: {data['timestamp']}")
         print(f"📊 Frame Count: {data['frames']}")
@@ -127,12 +127,12 @@ class PoseMonitor:
         print()
         print("💡 Controls:")
         print("   Ctrl+C to exit")
-        print("   Live updates from BathGuard logs")
+        print("   Live updates from DuruOn logs")
         
     def monitor(self):
         """Start monitoring pose detection"""
-        print("🚀 Starting BathGuard Pose Monitor - FIXED VERSION...")
-        print("📡 Connecting to BathGuard logs...")
+        print("🚀 Starting DuruOn Pose Monitor - FIXED VERSION...")
+        print("📡 Connecting to DuruOn logs...")
         
         try:
             # Use journalctl to follow the logs

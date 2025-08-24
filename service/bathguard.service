@@ -1,6 +1,6 @@
 
 [Unit]
-Description=BathGuard bathroom emergency monitor
+Description=DuruOn bathroom emergency monitor
 After=network-online.target
 
 [Service]

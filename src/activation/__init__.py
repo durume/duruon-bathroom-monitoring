@@ -1,1 +1,1 @@
-# PIR Activation Module for BathGuard
+# PIR Activation Module for DuruOn
