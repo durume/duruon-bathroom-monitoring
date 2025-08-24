@@ -1,0 +1,121 @@
+# DuruOn (BathGuard) - Git Ignore File
+
+# =============================================================================
+# SENSITIVE CONFIGURATION FILES - NEVER COMMIT THESE
+# =============================================================================
+.env
+*.env
+.env.local
+.env.production
+config_sensitive.yaml
+config_production.yaml
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+*.cover
+
+# =============================================================================
+# AI MODELS AND DATA
+# =============================================================================
+# Large model files (should be downloaded separately)
+models/*.tflite
+models/*.pb
+models/*.h5
+
+# Training data
+data/
+datasets/
+logs/
+
+# =============================================================================
+# CAMERA AND VIDEO FILES - NEVER COMMIT THESE
+# =============================================================================
+*.mp4
+*.avi
+*.mov
+*.jpg
+*.jpeg
+*.png
+*.bmp
+
+# =============================================================================
+# SYSTEM AND RUNTIME FILES
+# =============================================================================
+# Log files
+*.log
+logs/
+
+# PID files
+*.pid
+
+# Temporary files
+tmp/
+temp/
+
+# System files
+.DS_Store
+Thumbs.db
+*~
+
+# =============================================================================
+# DEVELOPMENT TOOLS
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+.ipynb_checkpoints
+.mypy_cache/
+
+# =============================================================================
+# BACKUP FILES
+# =============================================================================
+*.backup
+*.bak
+*.old
+
+# =============================================================================
+# KEEP IMPORTANT FILES
+# =============================================================================
+!README.md
+!LICENSE
+!requirements.txt
+!config.yaml
+!.gitignore

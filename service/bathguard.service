@@ -1,0 +1,21 @@
+
+[Unit]
+Description=BathGuard bathroom emergency monitor
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bathguard
+EnvironmentFile=/opt/bathguard/.env
+ExecStart=/opt/bathguard/venv/bin/python -m src.main --config /opt/bathguard/config.yaml
+Restart=always
+RestartSec=5
+
+# Protect device privacy
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

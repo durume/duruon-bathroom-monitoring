@@ -1,0 +1,47 @@
+# DuruOn configuration - Bathroom emergency monitoring with PIR activation and LED indicators
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  angle_threshold_deg: 50          # Reasonable trigger point for potential risk
+  drop_threshold: 0.08             # Moderate sensitivity
+  drop_window_s: 1.0               # Standard window
+  immobile_window_s: 10.0          # Base immobility threshold (10 seconds)
+  immobile_motion_eps: 0.05        # Base movement tolerance
+  soft_immobility_s: 45.0          # Soft alert after 30 seconds
+  hard_immobility_s: 5.0           # Emergency alert after 5 seconds for testing
+  cooldown_s: 60                  # 10 minute cooldown
+  # Enhanced shower-aware detection
+  movement_tolerance_low_angle: 0.50   # Very permissive tolerance to ensure alerts trigger
+  movement_tolerance_high_angle: 0.05  # Stricter when upright
+  shower_mode_enabled: true
+  shower_start_hour: 6             # Shower hours start
+  shower_end_hour: 22              # Shower hours end
+  shower_duration_multiplier: 4.0  # 4x longer thresholds during shower hours
+
+# PIR Sensor Activation System
+pir_activation:
+  enabled: true                    # Enable PIR sensor activation
+  pir_pin: 24                      # GPIO pin number (BCM numbering)
+  debounce_time: 2.0               # Minimum seconds between PIR triggers
+  activation_grace_period: 0.5    # Delay before full monitoring starts (seconds)
+  auto_sleep_timeout: 300.0       # Return to idle after 5 minutes of no motion
+
+# NEW: LED Status Indicators
+led_indicators:
+  enabled: true                    # Enable LED status indicators
+  green_pin: 18                    # System status LED (GPIO pin)
+  blue_pin: 23                     # PIR activity LED (GPIO pin)
+  red_pin: 25                      # Alert status LED (GPIO pin)
+
+telegram:
+  type: "telegram"

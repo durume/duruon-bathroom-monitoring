@@ -1,0 +1,24 @@
+# BathGuard configuration - PRACTICAL SETTINGS
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  angle_threshold_deg: 45          # Must be significantly tilted (45° or less)
+  drop_threshold: 0.20             # Moderate sensitivity  
+  drop_window_s: 0.8               # Standard window
+  immobile_window_s: 5.0           # Must be still for 5 seconds
+  immobile_motion_eps: 0.015       # Allow small movements
+  soft_immobility_s: 180           # 3 minutes before soft alert (much longer)
+  cooldown_s: 300                  # 5 minute cooldown
+
+telegram:
+  type: "telegram"

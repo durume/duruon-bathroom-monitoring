@@ -1,0 +1,14 @@
+backend:
+  type: mock
+camera:
+  enabled: false
+risk:
+  angle_threshold_deg: 65
+  cooldown_s: 300
+  drop_threshold: 0.25
+  drop_window_s: 0.7
+  immobile_motion_eps: 0.01
+  immobile_window_s: 4.0
+  soft_immobility_s: 120
+telegram:
+  type: dummy
