@@ -1,12 +1,248 @@
-# DuruOn — 프라이버시 우선 화장실 응급 모니터링 시스템
+<div align="center">
+
+# DuruOn — 프라이버시 우선 화장실 응급 모니터링
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%2B-red.svg)](https://www.raspberrypi.org/)
+[![Status](https://img.shields.io/badge/status-active-success.svg)](#)
 
-**DuruOn** 은 컴퓨터 비전과 포즈 추정을 활용하여 화장실에서의 **낙상** 및 **장시간 무동작(의식 저하 가능)** 상황을 감지하고, 텔레그램을 통해 실시간 알림(텍스트 + 익명화된 골격 이미지)을 전송하는 온디바이스 AI 시스템입니다. 모든 추론은 로컬에서 수행되며 영상은 저장·전송되지 않습니다.
+**낙상 / 장시간 무동작을 즉시 감지**하고 텔레그램으로 알림을 전송하는 초경량 온디바이스 AI 시스템입니다. 비디오는 저장·전송하지 않고 필요 최소 정보(텍스트 + 선택적 골격 이미지)만 전송합니다.
 
-> ⚠️ **프라이버시 주의**: 화장실은 매우 민감한 장소입니다. 반드시 **명시적 동의**를 얻고 관련 법규(개인정보, 영상처리 등)를 준수하십시오.
+**언어:** 한국어 | [ENGLISH](README.md)
+
+</div>
+
+> ⚠️ **프라이버시 & 동의**  
+> 모든 사용자(노출 가능자)의 **명시적 사전 동의**가 필요합니다. 개인정보/영상처리/의료기기 관련 지역 법규를 확인하세요. 본 프로젝트는 **보조 도구**이며 의료기기를 대체하지 않습니다.
+
+---
+## 1. 개요
+
+DuruOn은 Raspberry Pi 등 소형 리눅스 보드에서 실행되며:
+- 급격 낙상 (드롭 + 낮은 자세 + 짧은 무동작) 신속 감지
+- 장기 무동작 Soft → Hard 단계적 에스컬레이션
+- 샤워/세안 활동 중 오탐 감소 (시간 & 자세 기반 적응)
+- 텔레그램 알림 + 인라인 버튼 (괜찮아요 / 오탐 / 중지)
+- 로컬 추론으로 프라이버시 보존
+
+---
+## 2. 아키텍처 개요
+```
+          +------------------+
+          |   카메라 (Pi/USB) |
+          +---------+--------+
+                    v 프레임
+             +------+------+
+             |  포즈 백엔드 |  (MoveNet 또는 mock)
+             +------+------+
+                    v 포즈 키포인트
+             +------+------+
+             |  리스크 엔진 | (낙하 + 각도 + 무동작,
+             |  적응/샤워   |  빠른 낙상 경로)
+             +--+-------+--+
+                | 이벤트
+      +---------+---------+
+      |                   |
+      v                   v
+  텔레그램 알림      LED 인디케이터
+      |                   ^
+      v                   |
+ 수신자(보호자)  ←  PIR 활성/휴면
+```
+
+모듈 구조 (`src/`): `pose_backends/`, `risk/`, `notify/`, `activation/`, `indicators/`, `utils/`.
+
+---
+## 3. 주요 기능 요약
+| 범주 | 기능 |
+|------|------|
+| 감지 | 빠른 낙상 경로, Soft/Hard 무동작, 샤워 인식, 자세 기반 적응 |
+| 프라이버시 | 온디바이스 추론, 프레임 비저장, 익명 스켈레톤 이미지 |
+| 알림 | 텔레그램 인라인 버튼, 반복 재알림, Heartbeat, 중복 Cooldown |
+| 하드웨어 | PIR 모션 게이팅, 3색(3 LED) 상태 표시 |
+| 신뢰성 | 카메라 프리즈 감시, 그레이스풀 종료 |
+| 개발/테스트 | Mock 백엔드, 예제 설정(`examples/`), 단위 테스트, 더미 노티파이어 |
+
+---
+## 4. 빠른 시작 (입문용)
+```bash
+git clone https://github.com/your-username/duruon.git
+cd duruon
+./install.sh                     # /opt/bathguard 구성
+sudo nano /opt/bathguard/.env    # TG_BOT_TOKEN / TG_CHAT_ID 입력
+
+# Mock (카메라/센서 없이 논리 확인)
+cd /opt/bathguard
+venv/bin/python -m src.main --config config.yaml --backend mock
+
+# 실제 실행
+venv/bin/python -m src.main --config config.yaml
+
+# 대안 (임포트 문제 회피용 래퍼)
+venv/bin/python main_runner.py --config config.yaml
+```
+Bot 생성: @BotFather → 토큰 → 봇에게 메시지 → `https://api.telegram.org/bot<TOKEN>/getUpdates` → `chat.id` 추출.
+
+---
+## 5. 설정 개요 (`config.yaml`)
+```yaml
+backend:
+  type: movenet_tflite
+  model_path: models/movenet_singlepose_lightning.tflite
+  num_threads: 3
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+risk:
+  angle_threshold_deg: 55
+  drop_threshold: 0.10
+  drop_window_s: 0.9
+  immobile_window_s: 10.0
+  soft_immobility_s: 30.0
+  hard_immobility_s: 90.0
+  fast_fall_immobility_s: 12.0
+  cooldown_s: 120
+  movement_tolerance_low_angle: 0.50
+  movement_tolerance_high_angle: 0.05
+  shower_mode_enabled: true
+  shower_start_hour: 6
+  shower_end_hour: 22
+  shower_duration_multiplier: 4.0
+pir_activation:
+  enabled: true
+  pir_pin: 24
+  auto_sleep_timeout: 300.0
+led_indicators:
+  enabled: true
+  green_pin: 18
+  blue_pin: 23
+  red_pin: 25
+alerting:
+  repeat_unacked_after_s: 300
+  max_repeats: 3
+  heartbeat_hour: 9
+telegram:
+  type: telegram
+```
+`.env` 예시:
+```bash
+TG_BOT_TOKEN=123456:ABC...
+TG_CHAT_ID=999999999
+```
+
+### 파라미터 요약표
+| 이름 | 의미 | 값 ↑ (효과) | 값 ↓ (효과) |
+|------|------|-------------|-------------|
+| angle_threshold_deg | 낮은 자세 판단 기준 각도 | 더 느린 슬라이드 탐지 | 구부릴 때 오탐 감소 |
+| drop_threshold | 급락 높이 변화 기준 | 민감 ↑ | 오탐 ↓ |
+| fast_fall_immobility_s | 빠른 낙상 무동작 확인 창 | 더 빠른 경보 | 짧은 정지 오탐 감소 |
+| soft_immobility_s | Soft 알림 지연 | 느린 알림 | 빠른 알림 |
+| hard_immobility_s | Hard 에스컬레이션 | 느린 에스컬레이션 | 빠른 에스컬레이션 |
+| cooldown_s | 중복 억제 | 중복 ↓ | 반복 ↑ |
+| movement_tolerance_low_angle | 누운/구부린 상태 허용 움직임 | 오탐 ↓ | 민감 ↑ |
+| movement_tolerance_high_angle | 직립 허용 움직임 | 오탐 ↓ | 민감 ↑ |
+| shower_duration_multiplier | 샤워 시간 지연 배수 | 샤워 오탐 ↓ | 샤워 중 빠른 감지 |
+
+---
+## 6. 동작 원리 (쉬운 설명)
+1. 프레임 → MoveNet 17개 관절 키포인트 산출.  
+2. 엉덩이/어깨 평균으로 각도 & 수직 속도 계산.  
+3. 급락 + 낮은 자세 → 낙상 후보 → 짧은 무동작 타이머 시작.  
+4. 타이머 내 계속 무동작 & 낮은 자세 → 즉시 경보.  
+5. 실패 시 장기 무동작(Soft → Hard) 경로로 전환.  
+6. 샤워 시간에는 허용 시간 늘리고 모션 허용도 조정.  
+7. 미확인 경보는 재알림, Heartbeat로 일일 상태 보고.
+
+---
+## 7. 텔레그램 버튼
+| 라벨 | 영어 | 동작 |
+|------|------|------|
+| 괜찮아요 | I'm OK | 경보 확인 & 종료 |
+| 오탐 | False Alarm | 오탐 표시 (향후 튜닝 활용) |
+| 중지 | Stop | 원격 종료 |
+
+---
+## 8. 실행 모드
+| 모드 | 명령 | 설명 |
+|------|------|------|
+| 프로덕션 | `venv/bin/python -m src.main --config config.yaml` | 실제 하드웨어 |
+| 래퍼 | `venv/bin/python main_runner.py --config config.yaml` | 임포트 호환 |
+| Mock | `venv/bin/python -m src.main --config examples/config_mock.yaml` | 카메라 없음 |
+| 테스트 | `python -m tests.run_all` | 유닛 테스트 |
+
+---
+## 9. Systemd 서비스
+```bash
+sudo cp service/bathguard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bathguard
+journalctl -u bathguard -f
+```
+
+---
+## 10. 모니터링 / 로그
+```bash
+./monitor.sh health
+./monitor.sh live
+./monitor.sh perf
+```
+경보 로그: `alerts.log`.
+
+---
+## 11. 업데이트 / 유지보수
+```bash
+git pull
+sudo systemctl restart bathguard
+```
+모델 교체: 같은 경로 TFLite 파일 교체 후 재시작.
+
+---
+## 12. 문제 해결
+| 문제 | 확인 | 해결 |
+|------|------|------|
+| 카메라 X | `ls /dev/video*` | 케이블/활성화 확인 |
+| 텔레그램 X | 토큰/Chat ID | BotFather 재발급 |
+| 오탐 많음 | angle_threshold ↑ | movement_tolerance 조정 |
+| 감지 누락 | drop_threshold ↓ | fast_fall_immobility_s ↓ |
+| CPU 높음 | fps ↓ threads ↓ | 방열 개선 |
+
+---
+## 13. 보안 & 프라이버시 체크리스트
+| 항목 | 이유 |
+|------|------|
+| 물리적 접근 제한 | 카메라 재조준/분해 방지 |
+| SSH 키 사용 | 비밀번호 공격 방지 |
+| 정기 업데이트 | 보안 패치 적용 |
+| 최소 포트 개방 | 공격면 감소 |
+
+---
+## 14. 기여 (Contributing)
+1. Fork & 브랜치 생성  
+2. 테스트 추가/갱신  
+3. EN/KO README 동기화 유지  
+4. PR 제출 (변경 이유 명확히)  
+
+테스트: `python -m tests.run_all`.
+
+---
+## 15. 로드맵 아이디어
+- 다국어 i18n 맵 외부화
+- 알림 피드백 기반 자동 임계값 조정
+- 로컬 웹 대시보드
+- 선택적 음성 응답 (“괜찮으세요?”)
+
+---
+## 16. 감사
+TensorFlow, OpenCV, Raspberry Pi Foundation, Telegram Bot API, 커뮤니티 기여자분들께 감사.
+
+---
+## 17. 라이선스 & 면책
+MIT License (LICENSE 참조).  
+본 시스템은 **전문 의료 모니터링을 대체하지 않으며**, 보조 조기 경보 수단입니다.
 
 ---
 ## 🎯 주요 기능
