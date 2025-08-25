@@ -6,17 +6,19 @@
 
 **DuruOn** is an AI-powered bathroom emergency detection system that monitors for falls and immobility using computer vision and pose estimation. It provides real-time alerts via Telegram while maintaining complete privacy through on-device processing.
 
+[🇰🇷 한국어 문서](README_ko.md)
+
 > ⚠️ **Privacy Notice**: Bathrooms are highly sensitive spaces. Deploy only with **explicit consent** and check local privacy laws and regulations.
 
 ## 🎯 Features
 
 ### Core Functionality
 - **Real-time pose detection** using MoveNet SinglePose Lightning (TensorFlow Lite)
-- **Fall detection** via sudden drop + horizontal posture analysis
-- **Immobility monitoring** with adaptive thresholds based on body position
+- **Fall detection (fast + tiered)**: sudden drop + short immobility fast-path, plus longer immobility escalation
+- **Immobility monitoring** with adaptive thresholds (posture & shower-aware)
 - **PIR sensor integration** for motion-activated monitoring
 - **LED status indicators** for visual system feedback
-- **Telegram alerts** with interactive acknowledgment buttons
+- **Telegram alerts** with interactive acknowledgment buttons (localized KR/EN)
 
 ### Privacy & Security
 - **On-device inference** - no data leaves the device
@@ -25,10 +27,13 @@
 - **Secure notifications** - only text alerts and skeleton data transmitted
 
 ### Smart Detection
-- **Shower-aware thresholds** - different sensitivity during shower hours  
-- **Adaptive motion detection** - stricter monitoring for horizontal positions
+- **Fast fall pathway** - sudden drop + low angle + short immobility (configurable `fast_fall_immobility_s`)
+- **Tiered escalation** - soft immobility → hard immobility fallback
+- **Shower-aware thresholds** - extended durations & leniency during configured hours  
+- **Adaptive motion detection** - posture-based movement tolerance
 - **Cooldown periods** - prevents alert spam
-- **Multi-stage alerts** - soft warnings before emergency alerts
+- **Repeat reminders & STOP button** - configurable follow‑ups until acknowledged
+- **Heartbeat messages** - optional daily alive notification
 
 ## 🛠 Hardware Requirements
 
@@ -98,7 +103,7 @@ sudo nano /opt/bathguard/.env
 ```bash
 # Telegram Bot Configuration
 TG_BOT_TOKEN=your_bot_token_here
-TG_CHAT_ID=your_chat_id_here
+TG_CHAT_ID=your_chat_id_here  # Chat ID of the chat receiver
 ```
 
 ### Main Configuration (`config.yaml`)
@@ -117,11 +122,22 @@ camera:
   height: 480
   fps: 15
 
-# Risk Detection Parameters
+# Risk Detection Parameters (excerpt)
 risk:
-  angle_threshold_deg: 50.0
-  hard_immobility_s: 60.0
-  cooldown_s: 600
+  angle_threshold_deg: 55           # Horizontal / low‑posture risk threshold
+  drop_threshold: 0.10              # Normalized vertical drop (hip/shoulder avg)
+  drop_window_s: 0.9                # Time window to evaluate sudden drop
+  immobile_window_s: 10.0           # Averaging window for motion
+  soft_immobility_s: 30.0           # Soft alert delay (no fall detected)
+  hard_immobility_s: 90.0           # Long fallback escalation
+  fast_fall_immobility_s: 12.0      # Fast path confirmation after detected drop
+  cooldown_s: 120                   # Seconds to suppress duplicate alerts
+  movement_tolerance_low_angle: 0.50  # Motion tolerance when near-horizontal
+  movement_tolerance_high_angle: 0.05 # Upright stricter tolerance
+  shower_mode_enabled: true
+  shower_start_hour: 6
+  shower_end_hour: 22
+  shower_duration_multiplier: 4.0   # Multiplies immobility thresholds during shower hours
 
 # Hardware Configuration  
 pir_activation:
@@ -134,6 +150,17 @@ led_indicators:
   blue_pin: 23
   red_pin: 25
 ```
+
+### Telegram Button Meanings
+Buttons appear with each alert and reminders (localized in Korean by default):
+
+| Korean Label | English Meaning        | Action / Purpose                                 |
+|--------------|------------------------|--------------------------------------------------|
+| 괜찮아요       | I'm OK / Safe           | Acknowledge; dismisses alert, counts as resolved |
+| 오탐          | False Alarm             | Marks alert as false positive (adaptive tuning)  |
+| 중지          | Stop (optional)         | Stops the application process remotely           |
+
+To switch labels back to English, edit button texts in `src/main.py` (search for `buttons=[("괜찮아요"`). Future improvement: externalize i18n map.
 
 ## 🔧 Development
 
@@ -155,14 +182,14 @@ python -m src.main --config config_mock.yaml
 ### Project Structure
 ```
 duruon/
-├── src/                    # Main application source
-│   ├── main.py            # Application entry point
-│   ├── activation/        # PIR sensor system
-│   ├── indicators/        # LED status system
-│   ├── notify/            # Telegram notifications
-│   ├── pose_backends/     # AI pose detection
-│   ├── risk/              # Emergency detection logic
-│   └── utils/             # Utility functions
+├── src/                      # Main application source
+│   ├── main.py              # Application entry point (alerts, repeat, heartbeat, i18n KR)
+│   ├── activation/          # PIR sensor system
+│   ├── indicators/          # LED status system
+│   ├── notify/              # Telegram notifications & callback handling
+│   ├── pose_backends/       # AI pose detection (TFLite / mock)
+│   ├── risk/                # RiskEngine (fast fall + tiered immobility logic)
+│   └── utils/               # Utility functions (skeleton rendering, etc.)
 ├── tests/                 # Test suite
 ├── models/                # AI models
 ├── service/               # System service files

@@ -1,0 +1,49 @@
+alerting:
+  adaptive_hard_multiplier: 1.0
+  adaptive_soft_multiplier: 1.0
+  heartbeat:
+    enabled: true
+    interval_s: 86400
+  log_keep: 5
+  log_rotate_kb: 64
+  max_repeats: 3
+  repeat_unacked_after_s: 180
+  stop_button: true
+backend:
+  model_path: models/movenet_singlepose_lightning.tflite
+  num_threads: 3
+  type: movenet_tflite
+camera:
+  enabled: true
+  fps: 15
+  height: 480
+  index: 0
+  width: 640
+led_indicators:
+  blue_pin: 23
+  enabled: true
+  green_pin: 18
+  red_pin: 25
+pir_activation:
+  activation_grace_period: 0.5
+  auto_sleep_timeout: 300.0
+  debounce_time: 2.0
+  enabled: true
+  pir_pin: 24
+risk:
+  angle_threshold_deg: 50
+  cooldown_s: 60
+  drop_threshold: 0.08
+  drop_window_s: 1.0
+  hard_immobility_s: 5.0
+  immobile_motion_eps: 0.05
+  immobile_window_s: 10.0
+  movement_tolerance_high_angle: 0.05
+  movement_tolerance_low_angle: 0.5
+  shower_duration_multiplier: 4.0
+  shower_end_hour: 22
+  shower_mode_enabled: true
+  shower_start_hour: 6
+  soft_immobility_s: 45.0
+telegram:
+  type: telegram

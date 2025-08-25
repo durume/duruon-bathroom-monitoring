@@ -1,0 +1,21 @@
+# Practical settings example
+backend:
+  type: movenet_tflite
+  model_path: models/movenet_singlepose_lightning.tflite
+  num_threads: 3
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+risk:
+  angle_threshold_deg: 45
+  drop_threshold: 0.20
+  drop_window_s: 0.8
+  immobile_window_s: 5.0
+  immobile_motion_eps: 0.015
+  soft_immobility_s: 180
+  cooldown_s: 300
+telegram:
+  type: telegram

@@ -66,15 +66,18 @@ class TelegramNotifier:
                             
                             # Respond based on callback data
                             if callback_data == "ACK_OK":
-                                response_text = f"✅ Great! {user_name} confirmed they're okay. Alert cleared. 👍"
+                                # User acknowledged they are okay
+                                response_text = f"✅ 확인되었습니다. {user_name}님이 괜찮다고 응답했습니다. 알림을 해제합니다."
                             elif callback_data == "ACK_FALSE":
-                                response_text = f"⚠️ {user_name} indicated this was a false alarm. System will learn from this. 🤖"
+                                # Marked as false alarm
+                                response_text = f"⚠️ {user_name}님이 오탐지로 표시했습니다. 시스템이 개선에 반영합니다."
                             elif callback_data == "STOP_APP":
-                                response_text = f"🛑 {user_name} stopped DuruOn. App will shutdown."
+                                # Stop application command
+                                response_text = f"🛑 {user_name}님이 DuruOn을 중지했습니다. 애플리케이션을 종료합니다."
                                 self.send_text(response_text)
                                 return "STOP_APP"
                             else:
-                                response_text = f"📝 {user_name} responded to the alert."
+                                response_text = f"📝 {user_name}님이 알림에 응답했습니다."
                                 
                             self.send_text(response_text)
                             return callback_data

@@ -1,11 +1,24 @@
 import os, time, signal, sys, argparse, yaml
 import cv2
 
-from .risk.engine import RiskEngine, RiskConfig
-from .notify.telegram import TelegramNotifier, DummyNotifier
-from .pose_backends.mock_pose import MockBackend, sequence_hard_fall
-from .pose_backends.movenet_tflite import MoveNetSinglePose
-from .utils.skeleton_draw import render_skeleton_image
+# Support running as 'python src/main.py' by repairing sys.path and using absolute imports if relative fail
+try:
+    from .risk.engine import RiskEngine, RiskConfig  # type: ignore
+    from .notify.telegram import TelegramNotifier, DummyNotifier  # type: ignore
+    from .pose_backends.mock_pose import MockBackend, sequence_hard_fall  # type: ignore
+    from .pose_backends.movenet_tflite import MoveNetSinglePose  # type: ignore
+    from .utils.skeleton_draw import render_skeleton_image  # type: ignore
+except ImportError:  # pragma: no cover
+    pkg_root = os.path.dirname(os.path.abspath(__file__))
+    parent = os.path.dirname(pkg_root)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    # Retry with absolute-style imports
+    from risk.engine import RiskEngine, RiskConfig
+    from notify.telegram import TelegramNotifier, DummyNotifier
+    from pose_backends.mock_pose import MockBackend, sequence_hard_fall
+    from pose_backends.movenet_tflite import MoveNetSinglePose
+    from utils.skeleton_draw import render_skeleton_image
 
 # Import LED status indicators first to initialize GPIO
 LED_AVAILABLE = False
@@ -76,6 +89,7 @@ def run(config_path: str):
         immobile_motion_eps=float(risk_cfg.get("immobile_motion_eps", 0.05)),
         soft_immobility_s=float(risk_cfg.get("soft_immobility_s", 30.0)),
         hard_immobility_s=float(risk_cfg.get("hard_immobility_s", 60.0)),
+    fast_fall_immobility_s=float(risk_cfg.get("fast_fall_immobility_s", 12.0)),
         cooldown_s=float(risk_cfg.get("cooldown_s", 600.0)),
         confirm_grace_s=float(risk_cfg.get("confirm_grace_s", 6.0)),
         # Enhanced shower-aware parameters
@@ -138,6 +152,56 @@ def run(config_path: str):
     monitoring_active = pir_system is None  # Start active if no PIR, idle if PIR enabled
     frame_count = 0
     last_debug = 0
+    last_callback_check = 0.0
+    callback_interval = float(cfg.get('telegram', {}).get('callback_poll_interval_s', 3.0))
+    last_frame_hash = None
+    last_frame_hash_time = time.time()
+    freeze_alert_sent = False
+    frame_freeze_seconds = float(cfg.get('camera', {}).get('freeze_alert_s', 30.0))
+    
+    # Simple alert log (append-only). Avoid logging raw PII; only structural info.
+    alert_log_path = cfg.get('logging', {}).get('alert_log', 'alerts.log')
+    alert_cfg = cfg.get('alerting', {})
+    repeat_after = float(alert_cfg.get('repeat_unacked_after_s', 0))
+    max_repeats = int(alert_cfg.get('max_repeats', 0))
+    include_stop = bool(alert_cfg.get('stop_button', True))
+    heartbeat_cfg = alert_cfg.get('heartbeat', {})
+    heartbeat_enabled = bool(heartbeat_cfg.get('enabled', False))
+    heartbeat_interval = float(heartbeat_cfg.get('interval_s', 86400))
+    next_heartbeat = time.time() + heartbeat_interval if heartbeat_enabled else None
+    log_rotate_kb = int(alert_cfg.get('log_rotate_kb', 0))
+    log_keep = int(alert_cfg.get('log_keep', 3))
+    adaptive_soft_mult = float(alert_cfg.get('adaptive_soft_multiplier', 1.0))
+    adaptive_hard_mult = float(alert_cfg.get('adaptive_hard_multiplier', 1.0))
+    # Adaptive tuning state
+    base_soft_threshold = risk.cfg.soft_immobility_s
+    base_hard_threshold = risk.cfg.hard_immobility_s
+    soft_scale = 1.0
+    hard_scale = 1.0
+    last_adapt_event_count = 0
+    adapt_interval_events = 5  # evaluate every N resolved alerts (ack or false)
+    min_scale, max_scale = 0.5, 2.5
+    
+    active_alert = None  # dict with keys: first_ts, last_sent_ts, repeats, event, metrics
+    false_positive_count = 0
+    ack_ok_count = 0
+    def log_alert(event_type: str, metrics: dict):
+        try:
+            with open(alert_log_path, 'a') as lf:
+                lf.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},event={event_type},angle={metrics.get('torso_angle')},immobile={metrics.get('immobile')},drop={metrics.get('sudden_drop')}\n")
+            # Rotate if needed
+            if log_rotate_kb > 0 and os.path.getsize(alert_log_path) > log_rotate_kb * 1024:
+                for i in range(log_keep-1, 0, -1):
+                    old = f"{alert_log_path}.{i}"
+                    older = f"{alert_log_path}.{i+1}"
+                    if os.path.exists(old):
+                        if i+1 > log_keep-1 and os.path.exists(older):
+                            try: os.remove(older)
+                            except Exception: pass
+                        os.rename(old, older)
+                os.rename(alert_log_path, f"{alert_log_path}.1")
+        except Exception:
+            pass
     
     # PIR callbacks with LED integration
     def on_pir_activate():
@@ -202,9 +266,30 @@ def run(config_path: str):
             # Process frame based on monitoring state
             if monitoring_active:
                 # ACTIVE: Full pose detection and risk analysis
-                pose = backend.infer(frame)
+                # Safe inference wrapper
+                try:
+                    pose = backend.infer(frame)
+                except Exception as inf_err:
+                    print(f"⚠️ Inference error: {inf_err}")
+                    time.sleep(0.2)
+                    continue
                 metrics = risk.update(pose)
                 frame_count += 1
+                
+                # Camera freeze watchdog (hash every ~1s)
+                if use_camera and frame_count % int(max(1, fps)) == 0:
+                    try:
+                        frame_hash = hash(frame.tobytes()[:5000])  # partial hash for speed
+                        if frame_hash == last_frame_hash:
+                            if (time.time() - last_frame_hash_time) > frame_freeze_seconds and not freeze_alert_sent:
+                                notifier.send_text("⚠️ Camera feed appears frozen. Check lens or connection.")
+                                freeze_alert_sent = True
+                        else:
+                            last_frame_hash = frame_hash
+                            last_frame_hash_time = time.time()
+                            freeze_alert_sent = False
+                    except Exception:
+                        pass
 
                 # FIXED: Update PIR system only when BOTH camera detects person AND PIR detects motion
                 present = metrics.get("present")
@@ -269,12 +354,27 @@ def run(config_path: str):
                             else:
                                 led_system.set_alert_status("soft")
                         
+                        # Original English template kept for reference:
+                        # f"🚨 DuruOn alert ({event})\n" f"torso≈{metrics['torso_angle']:.0f}° drop={metrics['sudden_drop']} immobile={metrics['immobile']}\n"
+                        # Korean localized alert text
                         text = (
-                            f"🚨 DuruOn alert ({event})\n"
-                            f"torso≈{metrics['torso_angle']:.0f}° drop={metrics['sudden_drop']} immobile={metrics['immobile']}\n"
+                            f"🚨 DuruOn 경보 ({event})\n"
+                            f"몸각도≈{metrics['torso_angle']:.0f}° 쓰러짐={metrics['sudden_drop']} 무동작={metrics['immobile']}\n"
                             f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
                         )
-                        notifier.send_text(text, buttons=[("I'm OK","ACK_OK"),("False","ACK_FALSE")])
+                        # Localized button labels (Korean)
+                        buttons=[("괜찮아요","ACK_OK"),("오탐","ACK_FALSE")]
+                        if include_stop:
+                            buttons.append(("중지","STOP_APP"))
+                        notifier.send_text(text, buttons=buttons)
+                        log_alert(event, metrics)
+                        active_alert = {
+                            'first_ts': time.time(),
+                            'last_sent_ts': time.time(),
+                            'repeats': 0,
+                            'event': event,
+                            'metrics': metrics,
+                        }
                         try:
                             img = render_skeleton_image(pose)
                             notifier.send_photo(img, caption="Anonymized pose snapshot")
@@ -294,6 +394,80 @@ def run(config_path: str):
                     pir_status = pir_system.get_status() if pir_system else {"is_monitoring": False}
                     print(f"💤 IDLE: frames={frame_count}, PIR monitoring={pir_status.get('is_monitoring', False)}")
                     last_debug = current_time
+
+            # Telegram callback polling (ack buttons)
+            if current_time - last_callback_check >= callback_interval:
+                last_callback_check = current_time
+                try:
+                    cb = notifier.check_callbacks() if hasattr(notifier, 'check_callbacks') else None
+                    if cb == 'ACK_OK':
+                        if led_system:
+                            led_system.set_alert_status('none')
+                        print("✅ Alert acknowledged by user (OK)")
+                        ack_ok_count += 1
+                        active_alert = None
+                    elif cb == 'ACK_FALSE':
+                        if led_system:
+                            led_system.set_alert_status('none')
+                        print("🟡 Alert marked as false alarm by user")
+                        false_positive_count += 1
+                        active_alert = None
+                    elif cb == 'STOP_APP':
+                        print("🛑 STOP command received via Telegram")
+                        running = False
+                except Exception as e:
+                    print(f"⚠️ Callback polling error: {e}")
+
+            # Alert repeat logic
+            if active_alert and repeat_after > 0 and max_repeats > 0:
+                if (current_time - active_alert['last_sent_ts'] >= repeat_after and
+                        active_alert['repeats'] < max_repeats):
+                    # Resend reminder
+                    metrics = active_alert['metrics']
+                    # Korean localized reminder
+                    reminder = (
+                        f"⏰ 재알림: ({active_alert['event']}) 아직 확인되지 않았습니다\n"
+                        f"각도≈{metrics['torso_angle']:.0f}° 무동작={metrics['immobile']} 낙하={metrics['sudden_drop']}\n"
+                        f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    buttons=[("괜찮아요","ACK_OK"),("오탐","ACK_FALSE")]
+                    if include_stop: buttons.append(("중지","STOP_APP"))
+                    notifier.send_text(reminder, buttons=buttons)
+                    log_alert(active_alert['event']+"_repeat", metrics)
+                    active_alert['last_sent_ts'] = current_time
+                    active_alert['repeats'] += 1
+                    if active_alert['repeats'] >= max_repeats:
+                        # Stop repeating further, keep state until ack or new event
+                        pass
+
+            # Heartbeat
+            if heartbeat_enabled and next_heartbeat and current_time >= next_heartbeat:
+                notifier.send_text(f"💓 상태 점검: 시스템 정상 동작 중. 확인={ack_ok_count} 오탐={false_positive_count}")
+                next_heartbeat = current_time + heartbeat_interval
+
+            # Adaptive threshold tuning (lightweight heuristic)
+            total_events = ack_ok_count + false_positive_count
+            if adaptive_soft_mult > 0 and adaptive_hard_mult > 0 and total_events - last_adapt_event_count >= adapt_interval_events and not active_alert:
+                fp_ratio = false_positive_count / total_events if total_events else 0
+                adjust = False
+                if fp_ratio > 0.4:  # too many false alarms -> relax (increase durations)
+                    soft_scale *= 1.10
+                    hard_scale *= 1.05
+                    adjust = True
+                    reason = f"High false positive ratio {fp_ratio:.2f}" 
+                elif fp_ratio < 0.05 and ack_ok_count - last_adapt_event_count >= adapt_interval_events:  # very few false alarms -> tighten slightly
+                    soft_scale *= 0.95
+                    hard_scale *= 0.97
+                    adjust = True
+                    reason = f"Low false positive ratio {fp_ratio:.2f}" 
+                # Clamp scales
+                soft_scale = max(min_scale, min(max_scale, soft_scale))
+                hard_scale = max(min_scale, min(max_scale, hard_scale))
+                if adjust:
+                    risk.cfg.soft_immobility_s = base_soft_threshold * soft_scale * adaptive_soft_mult
+                    risk.cfg.hard_immobility_s = base_hard_threshold * hard_scale * adaptive_hard_mult
+                    print(f"🛠️ Adaptive tuning: soft={risk.cfg.soft_immobility_s:.1f}s hard={risk.cfg.hard_immobility_s:.1f}s (scales {soft_scale:.2f}/{hard_scale:.2f}) due to {reason}")
+                last_adapt_event_count = total_events
 
             # Frame rate control
             if use_camera:

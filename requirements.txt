@@ -1,0 +1,6 @@
+numpy
+opencv-python-headless
+pyyaml
+requests
+# Prefer tflite-runtime; tensorflow-cpu is fallback
+tflite-runtime; python_version >= '3.7'

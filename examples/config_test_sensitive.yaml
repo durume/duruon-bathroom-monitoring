@@ -1,0 +1,21 @@
+# Sensitive quick-test settings example
+backend:
+  type: movenet_tflite
+  model_path: models/movenet_singlepose_lightning.tflite
+  num_threads: 3
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+risk:
+  angle_threshold_deg: 75
+  drop_threshold: 0.15
+  drop_window_s: 1.0
+  immobile_window_s: 2.0
+  immobile_motion_eps: 0.02
+  soft_immobility_s: 60
+  cooldown_s: 30
+telegram:
+  type: telegram
