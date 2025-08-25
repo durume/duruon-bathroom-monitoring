@@ -119,3 +119,10 @@ Thumbs.db
 !requirements.txt
 !config.yaml
 !.gitignore
+
+# =============================================================================
+# DEPRECATED / STUB FILES (kept locally, excluded from future commits)
+# =============================================================================
+README_enhanced*.md
+config_backup.yaml
+main_original.py
