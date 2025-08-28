@@ -21,7 +21,7 @@ Before creating bug reports, please check the existing issues to avoid duplicate
 ### Development Setup
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/yourusername/duruon.git`
+2. Clone your fork: `git clone https://github.com/yourusername/duruon-bathroom-monitoring.git`
 3. Create a virtual environment: `python3 -m venv venv`
 4. Activate it: `source venv/bin/activate`
 5. Install dependencies: `pip install -r requirements.txt`
@@ -30,8 +30,28 @@ Before creating bug reports, please check the existing issues to avoid duplicate
 
 1. Create a new branch: `git checkout -b feature/your-feature-name`
 2. Make your changes and add tests
-3. Run the test suite: `python -m pytest`
+3. Run the test suite: `python -m tests.run_all`
 4. Commit with clear messages
+5. Keep documentation in sync (English `README.md` and Korean `README_ko.md`)
+
+#### Configuration Variants
+The root keeps only primary configs:
+- `config.yaml` (production baseline)
+- `config_debug.yaml` (debug instrumentation)
+- `config_mock.yaml` (mock backend / no hardware)
+- `config_launcher_demo.yaml` (demo launch tweaks)
+
+Additional example / legacy variants live under `examples/`:
+- `config_practical.yaml` (conservative delays)
+- `config_test_sensitive.yaml` (aggressive thresholds for quick tests)
+- `examples/legacy/config_test.yaml` (legacy baseline, avoid editing)
+
+When proposing new variants:
+- Prefer adding to `examples/` instead of root.
+- Provide a short comment header describing purpose & differences.
+- Update `examples/README.md` and avoid duplicating parameters identical to defaults.
+
+Removed legacy entrypoints (`main_original.py`, `main_full.py`, `main_slim.py`). Use `src/main.py` only. If you need a specialized mode, add guarded flags/config rather than duplicating files.
 
 ### Security Guidelines
 

@@ -1,4 +1,4 @@
-# Sensitive quick-test settings example
+## Sensitive / test configuration variant (moved from project root)
 backend:
   type: movenet_tflite
   model_path: models/movenet_singlepose_lightning.tflite

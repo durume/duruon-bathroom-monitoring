@@ -124,5 +124,18 @@ Thumbs.db
 # DEPRECATED / STUB FILES (kept locally, excluded from future commits)
 # =============================================================================
 README_enhanced*.md
-config_backup.yaml
 main_original.py
+main_full.py
+main_slim.py
+# Legacy root configs relocated to examples/ (keep ignore to avoid re-adding)
+config_backup.yaml
+config_practical.yaml
+config_test_sensitive.yaml
+config_test.yaml
+runtime_camera.yaml
+runtime_dummy.yaml
+temp_runtime.yaml
+config.yaml.backup
+main.py.backup
+telegram.py.backup
+main_runner.py
