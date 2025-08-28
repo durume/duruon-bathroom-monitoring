@@ -92,9 +92,18 @@ class DummyNotifier:
         self.messages = []
         self.photos = 0
     def send_text(self, text: str, buttons=None):
+        # Store and echo to console for visibility during mock/testing runs
         self.messages.append(("text", text))
+        print(f"[DummyNotifier][TEXT] {text.splitlines()[0][:120]}")
+        if buttons:
+            try:
+                labels = ", ".join(b[0] for b in buttons)
+                print(f"[DummyNotifier][BUTTONS] {labels}")
+            except Exception:
+                pass
     def send_photo(self, data: bytes, caption: str=""):
         self.photos += 1
         self.messages.append(("photo", caption))
+        print(f"[DummyNotifier][PHOTO] {caption}")
     def check_callbacks(self):
         return None

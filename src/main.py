@@ -1,24 +1,18 @@
 import os, time, signal, sys, argparse, yaml
-import cv2
-
-# Support running as 'python src/main.py' by repairing sys.path and using absolute imports if relative fail
+os.environ.setdefault("PYTHONUNBUFFERED","1")  # ensure unbuffered if service missed flag
 try:
-    from .risk.engine import RiskEngine, RiskConfig  # type: ignore
-    from .notify.telegram import TelegramNotifier, DummyNotifier  # type: ignore
-    from .pose_backends.mock_pose import MockBackend, sequence_hard_fall  # type: ignore
-    from .pose_backends.movenet_tflite import MoveNetSinglePose  # type: ignore
-    from .utils.skeleton_draw import render_skeleton_image  # type: ignore
-except ImportError:  # pragma: no cover
-    pkg_root = os.path.dirname(os.path.abspath(__file__))
-    parent = os.path.dirname(pkg_root)
-    if parent not in sys.path:
-        sys.path.insert(0, parent)
-    # Retry with absolute-style imports
-    from risk.engine import RiskEngine, RiskConfig
-    from notify.telegram import TelegramNotifier, DummyNotifier
-    from pose_backends.mock_pose import MockBackend, sequence_hard_fall
-    from pose_backends.movenet_tflite import MoveNetSinglePose
-    from utils.skeleton_draw import render_skeleton_image
+    import cv2
+    CV2_AVAILABLE = True
+except Exception as e:  # OpenCV optional
+    CV2_AVAILABLE = False
+    cv2 = None  # type: ignore
+    print(f"⚠️ OpenCV unavailable ({e}); running without camera support")
+
+from .risk.engine import RiskEngine, RiskConfig
+from .notify.telegram import TelegramNotifier, DummyNotifier
+from .pose_backends.mock_pose import MockBackend, sequence_hard_fall
+from .pose_backends.movenet_tflite import MoveNetSinglePose
+from .utils.skeleton_draw import render_skeleton_image
 
 # Import LED status indicators first to initialize GPIO
 LED_AVAILABLE = False
@@ -52,34 +46,119 @@ def make_backend(backend_cfg: dict):
         raise ValueError(f"Unknown backend type: {kind}")
 
 def make_notifier(cfg: dict):
+    # Explicit dummy choice
     if cfg.get("type","telegram") == "dummy":
         return DummyNotifier()
-    return TelegramNotifier(cfg.get("bot_token"), cfg.get("chat_id"))
+
+    # Prefer config values
+    token = cfg.get("bot_token")
+    chat_id = cfg.get("chat_id")
+
+    # Environment fallback (systemd EnvironmentFile or exported vars)
+    if not token:
+        token = (
+            os.getenv("TG_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
+        )
+    if not chat_id:
+        chat_id = (
+            os.getenv("TG_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID")
+        )
+
+    # If still missing, try to parse local .env (when running manually) without extra deps
+    if (not token or not chat_id) and os.path.exists('.env'):
+        try:
+            with open('.env','r') as f:
+                for line in f:
+                    if '=' not in line or line.strip().startswith('#'):
+                        continue
+                    k,v = line.strip().split('=',1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if not token and k in ("TG_BOT_TOKEN","TELEGRAM_BOT_TOKEN","BOT_TOKEN"):
+                        token = v
+                    if not chat_id and k in ("TG_CHAT_ID","TELEGRAM_CHAT_ID","CHAT_ID"):
+                        chat_id = v
+        except Exception as e:
+            print(f"⚠️ Could not parse .env for Telegram creds: {e}")
+
+    if not token or not chat_id:
+        print("⚠️ Telegram credentials not found (config/env/.env) – using DummyNotifier")
+        return DummyNotifier()
+
+    try:
+        return TelegramNotifier(token, chat_id)
+    except Exception as e:
+        print(f"⚠️ Failed to initialize TelegramNotifier ({e}); falling back to DummyNotifier")
+        return DummyNotifier()
 
 def run(config_path: str):
-    print("🔧 DEBUG: Starting run function")
     cfg = load_config(config_path)
-    print("🔧 DEBUG: Config loaded")
     backend = make_backend(cfg.get("backend", {}))
-    print("🔧 DEBUG: Backend created")
     notifier = make_notifier(cfg.get("telegram", {}))
-    print("🔧 DEBUG: Notifier created")
 
     camera = cfg.get("camera", {})
     use_camera = camera.get("enabled", True) and cfg.get("backend",{}).get("type","movenet_tflite") != "mock"
 
-    # Initialize camera
     cap = None
-    if use_camera:
-        cap = cv2.VideoCapture(int(camera.get("index",0)))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  int(camera.get("width",640)))
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(camera.get("height",480)))
-        cap.set(cv2.CAP_PROP_FPS, int(camera.get("fps",15)))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 15
-    else:
-        fps = 15
+    # Camera operational parameters & retry settings
+    camera_index = int(camera.get("index",0))
+    cam_width    = int(camera.get("width",640))
+    cam_height   = int(camera.get("height",480))
+    cam_req_fps  = int(camera.get("fps",15))
+    retry_interval_s = float(camera.get("retry_interval_s", 5.0))
+    error_notify_interval_s = float(camera.get("error_notify_interval_s", 60.0))
+    reopen_verbose = bool(camera.get("reopen_verbose", True))
+    last_camera_retry = 0.0
+    last_camera_error_notify = 0.0
+    fps = 15
 
-    # Initialize risk engine
+    def _open_camera():
+        nonlocal cap, fps
+        if not (use_camera and CV2_AVAILABLE):
+            return False
+        try:
+            c = cv2.VideoCapture(camera_index)
+            c.set(cv2.CAP_PROP_FRAME_WIDTH,  cam_width)
+            c.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
+            c.set(cv2.CAP_PROP_FPS, cam_req_fps)
+            if not c.isOpened():
+                c.release()
+                return False
+            cap = c
+            fps_val = c.get(cv2.CAP_PROP_FPS) or cam_req_fps
+            fps = fps_val if fps_val else 15
+            if reopen_verbose:
+                print(f"📷 Camera opened (index={camera_index}, {cam_width}x{cam_height} @ {fps:.1f}fps)")
+            return True
+        except Exception as e:
+            if reopen_verbose:
+                print(f"⚠️ Camera open exception: {e}")
+            return False
+
+    # Initial open attempt
+    if use_camera and CV2_AVAILABLE:
+        if not _open_camera():
+            print("⚠️ Initial camera open failed; will retry in background")
+    else:
+        if use_camera and not CV2_AVAILABLE:
+            print("⚠️ Camera requested but OpenCV not installed; continuing in mock/no-camera mode")
+
+    # PID file lock (prevent multiple instances)
+    pid_file = cfg.get("pid_file", "duruon.pid")
+    try:
+        if os.path.exists(pid_file):
+            with open(pid_file, 'r') as pf:
+                existing = pf.read().strip()
+            if existing.isdigit() and os.path.exists(f"/proc/{existing}"):
+                print(f"❌ Another DuruOn instance running (PID {existing}). Exiting.")
+                return
+            else:
+                print("⚠️ Stale PID file found; overwriting")
+        with open(pid_file, 'w') as pf:
+            pf.write(str(os.getpid()))
+    except Exception as e:
+        print(f"⚠️ Could not create PID file: {e}")
+
     risk_cfg = cfg.get("risk", {})
     risk = RiskEngine(fps=int(fps), cfg=RiskConfig(
         angle_threshold_deg=float(risk_cfg.get("angle_threshold_deg", 50.0)),
@@ -92,19 +171,17 @@ def run(config_path: str):
     fast_fall_immobility_s=float(risk_cfg.get("fast_fall_immobility_s", 12.0)),
         cooldown_s=float(risk_cfg.get("cooldown_s", 600.0)),
         confirm_grace_s=float(risk_cfg.get("confirm_grace_s", 6.0)),
-        # Enhanced shower-aware parameters
         movement_tolerance_low_angle=float(risk_cfg.get("movement_tolerance_low_angle", 0.12)),
         movement_tolerance_high_angle=float(risk_cfg.get("movement_tolerance_high_angle", 0.05)),
         shower_mode_enabled=bool(risk_cfg.get("shower_mode_enabled", True)),
         shower_start_hour=int(risk_cfg.get("shower_start_hour", 6)),
         shower_end_hour=int(risk_cfg.get("shower_end_hour", 22)),
         shower_duration_multiplier=float(risk_cfg.get("shower_duration_multiplier", 4.0)),
-        # Enhanced detection parameters  
         angle_change_threshold=float(risk_cfg.get("angle_change_threshold", 30.0)),
         position_change_threshold=float(risk_cfg.get("position_change_threshold", 0.15)),
+    min_kp_confidence=float(risk_cfg.get("min_kp_confidence", 0.10)),
     ))
 
-    # Initialize LED status indicators FIRST to set up GPIO
     led_system = None
     if LED_AVAILABLE:
         led_cfg = cfg.get("led_indicators", {})
@@ -117,22 +194,18 @@ def run(config_path: str):
             led_system.start()
             led_system.set_system_status("starting")
             print("✅ LED status indicators enabled")
-            # Give LED system time to initialize GPIO
             time.sleep(0.5)
         else:
             print("⚠️  LED indicators disabled in config")
     else:
         print("⚠️  LED indicators not available")
 
-    # Initialize PIR activation system AFTER LED system
     pir_system = None
     if PIR_AVAILABLE:
         pir_cfg = cfg.get("pir_activation", {})
         if pir_cfg.get("enabled", True):
             try:
-                # Add a small delay to ensure LED GPIO is properly initialized
                 time.sleep(0.5)
-                
                 pir_system = PIRActivation(
                     pir_pin=int(pir_cfg.get("pir_pin", 24)),
                     debounce_time=float(pir_cfg.get("debounce_time", 2.0)),
@@ -148,71 +221,71 @@ def run(config_path: str):
     else:
         print("⚠️  PIR activation not available - running in continuous mode")
 
-    # System state
-    monitoring_active = pir_system is None  # Start active if no PIR, idle if PIR enabled
+    # Alert / heartbeat configuration
+    alert_cfg = cfg.get("alerting", {})
+    heartbeat_cfg = alert_cfg.get("heartbeat", {}) if isinstance(alert_cfg.get("heartbeat"), dict) else {}
+    heartbeat_enabled = bool(heartbeat_cfg.get("enabled", False))
+    heartbeat_interval = float(heartbeat_cfg.get("interval_s", 86400.0))
+    last_heartbeat = time.time()
+    start_time = last_heartbeat
+    event_count = 0
+
+    monitoring_active = pir_system is None
     frame_count = 0
     last_debug = 0
-    last_callback_check = 0.0
-    callback_interval = float(cfg.get('telegram', {}).get('callback_poll_interval_s', 3.0))
-    last_frame_hash = None
-    last_frame_hash_time = time.time()
-    freeze_alert_sent = False
-    frame_freeze_seconds = float(cfg.get('camera', {}).get('freeze_alert_s', 30.0))
-    
-    # Simple alert log (append-only). Avoid logging raw PII; only structural info.
-    alert_log_path = cfg.get('logging', {}).get('alert_log', 'alerts.log')
-    alert_cfg = cfg.get('alerting', {})
-    repeat_after = float(alert_cfg.get('repeat_unacked_after_s', 0))
-    max_repeats = int(alert_cfg.get('max_repeats', 0))
-    include_stop = bool(alert_cfg.get('stop_button', True))
-    heartbeat_cfg = alert_cfg.get('heartbeat', {})
-    heartbeat_enabled = bool(heartbeat_cfg.get('enabled', False))
-    heartbeat_interval = float(heartbeat_cfg.get('interval_s', 86400))
-    next_heartbeat = time.time() + heartbeat_interval if heartbeat_enabled else None
-    log_rotate_kb = int(alert_cfg.get('log_rotate_kb', 0))
-    log_keep = int(alert_cfg.get('log_keep', 3))
-    adaptive_soft_mult = float(alert_cfg.get('adaptive_soft_multiplier', 1.0))
-    adaptive_hard_mult = float(alert_cfg.get('adaptive_hard_multiplier', 1.0))
-    # Adaptive tuning state
-    base_soft_threshold = risk.cfg.soft_immobility_s
-    base_hard_threshold = risk.cfg.hard_immobility_s
-    soft_scale = 1.0
-    hard_scale = 1.0
-    last_adapt_event_count = 0
-    adapt_interval_events = 5  # evaluate every N resolved alerts (ack or false)
-    min_scale, max_scale = 0.5, 2.5
-    
-    active_alert = None  # dict with keys: first_ts, last_sent_ts, repeats, event, metrics
-    false_positive_count = 0
-    ack_ok_count = 0
-    def log_alert(event_type: str, metrics: dict):
+    # Throttle repetitive presence combination logs
+    last_presence_combo = None  # ('present','pir_motion') tuple
+    last_presence_log_time = 0.0
+    presence_log_interval = 10.0  # seconds
+    first_presence_cycle = True
+
+    # Logging frequency (lower debug frequency)
+    logging_cfg = cfg.get("logging", {}) if isinstance(cfg.get("logging"), dict) else {}
+    active_debug_interval = float(logging_cfg.get("active_debug_interval_s", 30.0))  # was 5
+    idle_debug_interval = float(logging_cfg.get("idle_debug_interval_s", 120.0))     # was 30
+    # Presence log debounce settings
+    presence_min_persist_s = float(logging_cfg.get("presence_min_persist_s", 2.0))
+    min_log_gap_s = float(logging_cfg.get("presence_min_log_gap_s", 1.5))
+    last_presence_log_real = 0.0
+    pending_combo = None
+    pending_combo_since = 0.0
+
+    # Debug frame capture configuration
+    debug_cfg = cfg.get("debug", {}) if isinstance(cfg.get("debug"), dict) else {}
+    debug_save_frames = bool(debug_cfg.get("save_frames", False)) and CV2_AVAILABLE and use_camera
+    debug_frame_dir = debug_cfg.get("frame_dir", "debug_frames")
+    debug_save_interval = float(debug_cfg.get("save_interval_s", 10.0))
+    debug_save_on_state_change = bool(debug_cfg.get("save_on_state_change", True))
+    debug_max_frames = int(debug_cfg.get("max_frames", 200))
+    debug_brightness_warn_interval = float(debug_cfg.get("brightness_warn_interval_s", 60.0))
+    risk_verbose = bool(debug_cfg.get("risk_verbose", False))
+    risk_verbose_interval = float(debug_cfg.get("risk_verbose_interval_s", 5.0))
+    risk_snapshot_interval = float(debug_cfg.get("risk_snapshot_every_s", 0.0))  # 0 = disabled
+    keypoint_dump = bool(debug_cfg.get("keypoint_dump", True))
+    keypoint_dump_top_n = int(debug_cfg.get("keypoint_dump_top_n", 6))  # show weakest N keypoints
+    risk_verbose_compact = bool(debug_cfg.get("risk_verbose_compact", True))
+    last_debug_frame_save = 0.0
+    last_brightness_warn = 0.0
+    saved_frame_count = 0
+    last_saved_state_combo = None
+    last_risk_verbose = 0.0
+    last_risk_snapshot = 0.0
+    if debug_save_frames:
         try:
-            with open(alert_log_path, 'a') as lf:
-                lf.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},event={event_type},angle={metrics.get('torso_angle')},immobile={metrics.get('immobile')},drop={metrics.get('sudden_drop')}\n")
-            # Rotate if needed
-            if log_rotate_kb > 0 and os.path.getsize(alert_log_path) > log_rotate_kb * 1024:
-                for i in range(log_keep-1, 0, -1):
-                    old = f"{alert_log_path}.{i}"
-                    older = f"{alert_log_path}.{i+1}"
-                    if os.path.exists(old):
-                        if i+1 > log_keep-1 and os.path.exists(older):
-                            try: os.remove(older)
-                            except Exception: pass
-                        os.rename(old, older)
-                os.rename(alert_log_path, f"{alert_log_path}.1")
-        except Exception:
-            pass
-    
-    # PIR callbacks with LED integration
+            os.makedirs(debug_frame_dir, exist_ok=True)
+            print(f"🧪 Debug frame saving enabled -> {debug_frame_dir}/ (interval={debug_save_interval}s, on_state_change={debug_save_on_state_change})")
+        except Exception as e:
+            print(f"⚠️ Could not create debug frame directory {debug_frame_dir}: {e}")
+            debug_save_frames = False
+
     def on_pir_activate():
         nonlocal monitoring_active
         monitoring_active = True
         print("🟢 PIR ACTIVATED - Starting pose detection and risk monitoring")
         if led_system:
-            led_system.set_pir_status("triggered")  # Flash blue LED
-            # Set monitoring status after brief delay to show person detected  
+            led_system.set_pir_status("triggered")
             led_system.set_system_status("active")
-        
+
     def on_pir_deactivate():
         nonlocal monitoring_active
         monitoring_active = False
@@ -221,13 +294,11 @@ def run(config_path: str):
             led_system.set_pir_status("clear")
             led_system.set_system_status("idle")
 
-    # Setup PIR callbacks
     if pir_system:
         pir_system.set_activation_callback(on_pir_activate)
         pir_system.set_deactivation_callback(on_pir_deactivate)
         pir_system.start()
 
-    # Signal handling
     running = True
     def handle_sig(*_):
         nonlocal running
@@ -235,7 +306,26 @@ def run(config_path: str):
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, handle_sig)
 
-    print("🚀 DuruOn starting with PIR activation and LED indicators...")
+    # Startup summary (include git revision if available)
+    backend_type = cfg.get("backend", {}).get("type", "unknown")
+    notifier_type = type(notifier).__name__
+    camera_status = (
+        f"enabled idx={camera_index} {cam_width}x{cam_height}@{cam_req_fps}fps" if (use_camera and CV2_AVAILABLE) else (
+            "requested-but-missing-OpenCV" if use_camera and not CV2_AVAILABLE else "disabled")
+    )
+    pir_status = "enabled" if pir_system else "disabled"
+    led_status = "enabled" if LED_AVAILABLE else "disabled"
+    git_rev = None
+    try:
+        import subprocess
+        git_rev = subprocess.check_output(["git","rev-parse","--short","HEAD"], stderr=subprocess.DEVNULL, timeout=1).decode().strip()
+    except Exception:
+        git_rev = os.getenv("GIT_REV") or "unknown"
+    print(f"🚀 DuruOn starting (rev={git_rev})...")
+    print(f"ℹ️  Backend={backend_type} | Camera={camera_status} | PIR={pir_status} | LED={led_status} | Notifier={notifier_type}")
+    if heartbeat_enabled:
+        print(f"🫀 Heartbeat enabled every {heartbeat_interval/60:.1f} min")
+    sys.stdout.flush()
     if pir_system:
         print("💤 System in IDLE mode - waiting for PIR motion detection")
         if led_system:
@@ -245,239 +335,246 @@ def run(config_path: str):
         if led_system:
             led_system.set_system_status("active")
 
-    # Main monitoring loop
     try:
         while running:
             current_time = time.time()
-
-            # Always read camera frame (minimal processing when idle)
-            if use_camera:
+            if use_camera and CV2_AVAILABLE:
+                # Ensure camera open / retry
+                if (cap is None or not cap.isOpened()):
+                    now = time.time()
+                    if now - last_camera_retry >= retry_interval_s:
+                        last_camera_retry = now
+                        opened = _open_camera()
+                        if not opened and reopen_verbose:
+                            print(f"⏳ Camera reopen attempt failed; next in {retry_interval_s:.1f}s")
+                    frame = None
+                    # If camera not yet available, idle briefly
+                    if cap is None or not cap.isOpened():
+                        time.sleep(0.2)
+                        continue
                 ok, frame = cap.read()
                 if not ok:
-                    if monitoring_active:  # Only send notifications when active
-                        notifier.send_text("⚠️ Camera disconnected or no frames. Check device.")
+                    # Release and schedule retry
+                    if reopen_verbose:
+                        print("⚠️ Camera frame read failed; releasing and scheduling reopen")
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    cap = None
+                    now = time.time()
+                    if monitoring_active and (now - last_camera_error_notify) >= error_notify_interval_s:
+                        notifier.send_text("⚠️ Camera disconnected or no frames. Will keep retrying.")
+                        last_camera_error_notify = now
                     if led_system:
                         led_system.set_system_status("error")
-                    time.sleep(5)
+                    time.sleep(0.5)
                     continue
             else:
-                frame = None  # mock backend ignores
+                frame = None
 
-            # Process frame based on monitoring state
             if monitoring_active:
-                # ACTIVE: Full pose detection and risk analysis
-                # Safe inference wrapper
+                # Optional brightness / debug frame saving BEFORE inference
+                if use_camera and CV2_AVAILABLE and frame is not None:
+                    try:
+                        mean_val = float(frame.mean())
+                        now_bt = time.time()
+                        if mean_val < 30 and (now_bt - last_brightness_warn) >= debug_brightness_warn_interval:
+                            level = "extremely dark" if mean_val < 10 else "dark"
+                            print(f"🌑 LOW LIGHT: mean_pixel={mean_val:.1f} ({level}) -> detection quality may drop")
+                            last_brightness_warn = now_bt
+                        # Save diagnostic frame if enabled
+                        if debug_save_frames:
+                            combo_state = (last_presence_combo or (False, False))
+                            save_reason = None
+                            if (time.time() - last_debug_frame_save) >= debug_save_interval:
+                                save_reason = "interval"
+                            if debug_save_on_state_change and combo_state != last_saved_state_combo:
+                                save_reason = (save_reason + "+state" if save_reason else "state_change")
+                            if save_reason and saved_frame_count < debug_max_frames:
+                                ts_name = time.strftime('%Y%m%d_%H%M%S')
+                                fname = os.path.join(debug_frame_dir, f"frame_{ts_name}_{save_reason}_{saved_frame_count:04d}.jpg")
+                                try:
+                                    cv2.imwrite(fname, frame)
+                                    print(f"🖼️ Saved debug frame ({save_reason}) -> {fname}")
+                                    last_debug_frame_save = time.time()
+                                    last_saved_state_combo = combo_state
+                                    saved_frame_count += 1
+                                except Exception as e:
+                                    print(f"⚠️ Failed saving debug frame: {e}")
+                                if saved_frame_count >= debug_max_frames:
+                                    print("🧪 Reached debug_max_frames limit; disabling further saves")
+                                    debug_save_frames = False
+                    except Exception as e:
+                        pass
                 try:
                     pose = backend.infer(frame)
-                except Exception as inf_err:
-                    print(f"⚠️ Inference error: {inf_err}")
-                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"⚠️ backend.infer error: {e}; skipping frame")
+                    time.sleep(0.05)
                     continue
                 metrics = risk.update(pose)
                 frame_count += 1
-                
-                # Camera freeze watchdog (hash every ~1s)
-                if use_camera and frame_count % int(max(1, fps)) == 0:
-                    try:
-                        frame_hash = hash(frame.tobytes()[:5000])  # partial hash for speed
-                        if frame_hash == last_frame_hash:
-                            if (time.time() - last_frame_hash_time) > frame_freeze_seconds and not freeze_alert_sent:
-                                notifier.send_text("⚠️ Camera feed appears frozen. Check lens or connection.")
-                                freeze_alert_sent = True
-                        else:
-                            last_frame_hash = frame_hash
-                            last_frame_hash_time = time.time()
-                            freeze_alert_sent = False
-                    except Exception:
-                        pass
-
-                # FIXED: Update PIR system only when BOTH camera detects person AND PIR detects motion
                 present = metrics.get("present")
                 pir_motion = pir_system._read_pir() if pir_system else False
-                
-                if pir_system and present and pir_motion:
-                    print(f"✅ DUAL DETECTION: Camera + PIR both detect presence, resetting PIR timer")
-                    pir_system.update_motion()
-                    # Set blue LED to monitoring when person is actually detected
-                    if led_system:
-                        led_system.set_pir_status("monitoring")
-                elif pir_system and present:
-                    # EMERGENCY OVERRIDE: If camera detects person, keep PIR active even without PIR motion
-                    print(f"🚨 EMERGENCY OVERRIDE: Camera detects person, keeping PIR active for safety")
-                    pir_system.update_motion()  # Reset PIR timer to prevent deactivation
-                elif pir_system:
-                    if present and not pir_motion:
-                        print(f"📷 CAMERA ONLY: Camera detects person but PIR clear - allowing PIR countdown")
-                    elif not present and pir_motion:
-                        print(f"📡 PIR ONLY: PIR detects motion but no person in camera - allowing PIR countdown") 
-                    else:
-                        print(f"👻 BOTH CLEAR: No camera detection and PIR clear - PIR timer counting down")
 
-                # Debug output every 1 second when active
-                if current_time - last_debug >= 1:
+                # Risk debug instrumentation
+                if risk_verbose:
+                    now_rv = time.time()
+                    if (now_rv - last_risk_verbose) >= risk_verbose_interval:
+                        # Optional keypoint dump when absent or low score
+                        kp_extra = ""
+                        if keypoint_dump:
+                            try:
+                                # Sort by confidence ascending
+                                kps = sorted(pose.keypoints.items(), key=lambda kv: kv[1][2])
+                                weakest = kps[:keypoint_dump_top_n]
+                                weakest_str = ",".join([f"{n}:{v[2]:.2f}" for n,v in weakest])
+                                # Show hips/shoulders explicitly if missing
+                                req = []
+                                for rq in ("left_hip","right_hip","left_shoulder","right_shoulder"):
+                                    if rq in pose.keypoints:
+                                        req.append(f"{rq}:{pose.keypoints[rq][2]:.2f}")
+                                kp_extra = f" | kp[{len(pose.keypoints)}] mean={pose.score:.2f} weak={weakest_str} req={' '.join(req)}"
+                            except Exception:
+                                pass
+                        if risk_verbose_compact:
+                            # Compact form (avoid terminal wrapping)
+                            print(
+                                "🧪 RISK DBG: pres=%s evt=%s ang=%.0f° drop=%s imm=%s sc=%.2f%s" % (
+                                    metrics.get('present'), metrics.get('event'), metrics.get('torso_angle', -1.0),
+                                    metrics.get('sudden_drop'), metrics.get('immobile'), pose.score, kp_extra
+                                )
+                            )
+                        else:
+                            print(
+                                "🧪 RISK DBG: present=%s event=%s angle=%.1f sudden_drop=%s dy=%.3f angleΔ=%.1f totalAngleΔ=%.1f motion_eps=%.3f immobile=%s softT=%.1fs hardT=%.1fs vx=%.3f vy=%.3f score=%.2f%s" % (
+                                    metrics.get('present'), metrics.get('event'), metrics.get('torso_angle', -1.0),
+                                    metrics.get('sudden_drop'), metrics.get('vertical_dy', 0.0), metrics.get('angle_change',0.0), metrics.get('angle_change_total',0.0),
+                                    metrics.get('adaptive_motion_eps',0.0), metrics.get('immobile'),
+                                    metrics.get('adaptive_soft_threshold',0.0), metrics.get('adaptive_hard_threshold',0.0),
+                                    metrics.get('debug_vx',0.0), metrics.get('debug_vy',0.0), pose.score, kp_extra
+                                )
+                            )
+                        last_risk_verbose = now_rv
+                    # Optional periodic anonymized snapshot even without event to verify pose skeleton
+                    if risk_snapshot_interval > 0 and metrics.get('present'):
+                        now_rs = time.time()
+                        if (now_rs - last_risk_snapshot) >= risk_snapshot_interval:
+                            try:
+                                img_dbg = render_skeleton_image(pose)
+                                notifier.send_photo(img_dbg, caption="🧪 Debug pose snapshot")
+                                last_risk_snapshot = now_rs
+                            except Exception as e:
+                                print(f"⚠️ Debug snapshot failed: {e}")
+                if pir_system:
+                    combo = (bool(present), bool(pir_motion))  # (present, pir_motion)
+                    now_ts = time.time()
+                    periodic = (now_ts - last_presence_log_time) >= presence_log_interval
+                    suppress = first_presence_cycle and combo == (False, False)
+                    # Debounce logic: wait for stability before accepting new combo
+                    if combo != last_presence_combo:
+                        if pending_combo != combo:
+                            pending_combo = combo
+                            pending_combo_since = now_ts
+                        stable = (now_ts - pending_combo_since) >= presence_min_persist_s
+                        # Dual detection considered important -> bypass stability delay
+                        if combo == (True, True):
+                            stable = True
+                        if stable:
+                            # Enforce minimum gap between any presence logs
+                            if (now_ts - last_presence_log_real) >= min_log_gap_s:
+                                if combo == (True, True):
+                                    print("✅ DUAL DETECTION: Camera + PIR both detect presence (timer reset)")
+                                elif combo == (True, False):
+                                    print("📷 CAMERA ONLY: person detected; PIR clear (countdown continues)")
+                                elif combo == (False, True):
+                                    print("📡 PIR ONLY: motion detected; no person in camera (countdown continues)")
+                                elif not suppress:
+                                    print("👻 BOTH CLEAR: no person & PIR clear (idle countdown)")
+                                last_presence_combo = combo
+                                last_presence_log_real = now_ts
+                                last_presence_log_time = now_ts
+                                if combo == (True, True):
+                                    pir_system.update_motion()
+                                    if led_system:
+                                        led_system.set_pir_status("monitoring")
+                    elif periodic and (now_ts - last_presence_log_real) >= min_log_gap_s:
+                        # Periodic heartbeat of presence state
+                        if last_presence_combo == (True, True):
+                            print("✅ DUAL DETECTION: (periodic)")
+                        elif last_presence_combo == (True, False):
+                            print("📷 CAMERA ONLY: (periodic) still person detected")
+                        elif last_presence_combo == (False, True):
+                            print("📡 PIR ONLY: (periodic) still motion only")
+                        elif not suppress:
+                            print("👻 BOTH CLEAR: (periodic) still idle")
+                        last_presence_log_time = now_ts
+                        last_presence_log_real = now_ts
+                    first_presence_cycle = False
+                if current_time - last_debug >= active_debug_interval:
                     present = metrics.get("present")
                     event = metrics.get("event") 
                     if present:
                         torso_angle = metrics.get('torso_angle', 'N/A')
                         vx = metrics.get('debug_vx', 0)
                         vy = metrics.get('debug_vy', 0)
-                        immobile = metrics.get('immobile', False)
-                        adaptive_motion_eps = metrics.get('adaptive_motion_eps', 'N/A')
-                        total_movement = (vx**2 + vy**2)**0.5
-                        angle_low = torso_angle <= 50.0 if torso_angle != 'N/A' else False
                         print(f"🔍 ACTIVE: frames={frame_count}, present={present}, event={event}, torso_angle={torso_angle:.1f}°, vx={vx:.3f}, vy={vy:.3f}")
-                        print(f"  🐛 DEBUG: immobile={immobile}, total_movement={total_movement:.3f}, threshold={adaptive_motion_eps}, angle_low={angle_low}")
-                        
-                        # Show alert conditions
-                        if angle_low and immobile and not event:
-                            print(f"  ⚠️  SHOULD ALERT: Low angle + immobile but no event! Check risk engine timer logic.")
                     else:
                         print(f"🔍 ACTIVE: frames={frame_count}, present={present}, event={event}, no person detected")
-                    
-                    # PIR status debug
                     if pir_system:
                         time_since_motion = current_time - pir_system.last_motion_time if pir_system.last_motion_time else 0
                         print(f"📡 PIR DEBUG: monitoring={pir_system.is_monitoring}, last_motion={time_since_motion:.1f}s ago, timeout={pir_system.auto_sleep_timeout}s")
                         if time_since_motion > pir_system.auto_sleep_timeout:
                             print("⚠️  PIR SHOULD DEACTIVATE BUT HASN'T!")
-                    
                     last_debug = current_time
-
-                # Handle emergency events with LED indicators
                 if metrics.get("present"):
                     event = metrics.get("event")
                     if event:
-                        # Update LED status for alerts
+                        event_count += 1
                         if led_system:
                             if "hard" in event or "fall" in event:
                                 led_system.set_alert_status("emergency")
                             else:
                                 led_system.set_alert_status("soft")
-                        
-                        # Original English template kept for reference:
-                        # f"🚨 DuruOn alert ({event})\n" f"torso≈{metrics['torso_angle']:.0f}° drop={metrics['sudden_drop']} immobile={metrics['immobile']}\n"
-                        # Korean localized alert text
                         text = (
-                            f"🚨 DuruOn 경보 ({event})\n"
-                            f"몸각도≈{metrics['torso_angle']:.0f}° 쓰러짐={metrics['sudden_drop']} 무동작={metrics['immobile']}\n"
+                            f"🚨 DuruOn alert ({event})\n"
+                            f"torso≈{metrics['torso_angle']:.0f}° drop={metrics['sudden_drop']} immobile={metrics['immobile']}\n"
                             f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
                         )
-                        # Localized button labels (Korean)
-                        buttons=[("괜찮아요","ACK_OK"),("오탐","ACK_FALSE")]
-                        if include_stop:
-                            buttons.append(("중지","STOP_APP"))
-                        notifier.send_text(text, buttons=buttons)
-                        log_alert(event, metrics)
-                        active_alert = {
-                            'first_ts': time.time(),
-                            'last_sent_ts': time.time(),
-                            'repeats': 0,
-                            'event': event,
-                            'metrics': metrics,
-                        }
+                        notifier.send_text(text, buttons=[("I'm OK","ACK_OK"),("False","ACK_FALSE")])
                         try:
                             img = render_skeleton_image(pose)
                             notifier.send_photo(img, caption="Anonymized pose snapshot")
                         except Exception as e:
                             print("skeleton render failed:", e)
                     else:
-                        # Clear alert status if no event
                         if led_system:
                             led_system.set_alert_status("none")
-
-            else:
-                # IDLE: Minimal processing, just waiting for PIR
-                frame_count += 1
-                
-                # Minimal debug output when idle
-                if current_time - last_debug >= 30:  # Every 30 seconds when idle
-                    pir_status = pir_system.get_status() if pir_system else {"is_monitoring": False}
-                    print(f"💤 IDLE: frames={frame_count}, PIR monitoring={pir_status.get('is_monitoring', False)}")
-                    last_debug = current_time
-
-            # Telegram callback polling (ack buttons)
-            if current_time - last_callback_check >= callback_interval:
-                last_callback_check = current_time
-                try:
-                    cb = notifier.check_callbacks() if hasattr(notifier, 'check_callbacks') else None
-                    if cb == 'ACK_OK':
-                        if led_system:
-                            led_system.set_alert_status('none')
-                        print("✅ Alert acknowledged by user (OK)")
-                        ack_ok_count += 1
-                        active_alert = None
-                    elif cb == 'ACK_FALSE':
-                        if led_system:
-                            led_system.set_alert_status('none')
-                        print("🟡 Alert marked as false alarm by user")
-                        false_positive_count += 1
-                        active_alert = None
-                    elif cb == 'STOP_APP':
-                        print("🛑 STOP command received via Telegram")
-                        running = False
-                except Exception as e:
-                    print(f"⚠️ Callback polling error: {e}")
-
-            # Alert repeat logic
-            if active_alert and repeat_after > 0 and max_repeats > 0:
-                if (current_time - active_alert['last_sent_ts'] >= repeat_after and
-                        active_alert['repeats'] < max_repeats):
-                    # Resend reminder
-                    metrics = active_alert['metrics']
-                    # Korean localized reminder
-                    reminder = (
-                        f"⏰ 재알림: ({active_alert['event']}) 아직 확인되지 않았습니다\n"
-                        f"각도≈{metrics['torso_angle']:.0f}° 무동작={metrics['immobile']} 낙하={metrics['sudden_drop']}\n"
-                        f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-                    buttons=[("괜찮아요","ACK_OK"),("오탐","ACK_FALSE")]
-                    if include_stop: buttons.append(("중지","STOP_APP"))
-                    notifier.send_text(reminder, buttons=buttons)
-                    log_alert(active_alert['event']+"_repeat", metrics)
-                    active_alert['last_sent_ts'] = current_time
-                    active_alert['repeats'] += 1
-                    if active_alert['repeats'] >= max_repeats:
-                        # Stop repeating further, keep state until ack or new event
-                        pass
-
-            # Heartbeat
-            if heartbeat_enabled and next_heartbeat and current_time >= next_heartbeat:
-                notifier.send_text(f"💓 상태 점검: 시스템 정상 동작 중. 확인={ack_ok_count} 오탐={false_positive_count}")
-                next_heartbeat = current_time + heartbeat_interval
-
-            # Adaptive threshold tuning (lightweight heuristic)
-            total_events = ack_ok_count + false_positive_count
-            if adaptive_soft_mult > 0 and adaptive_hard_mult > 0 and total_events - last_adapt_event_count >= adapt_interval_events and not active_alert:
-                fp_ratio = false_positive_count / total_events if total_events else 0
-                adjust = False
-                if fp_ratio > 0.4:  # too many false alarms -> relax (increase durations)
-                    soft_scale *= 1.10
-                    hard_scale *= 1.05
-                    adjust = True
-                    reason = f"High false positive ratio {fp_ratio:.2f}" 
-                elif fp_ratio < 0.05 and ack_ok_count - last_adapt_event_count >= adapt_interval_events:  # very few false alarms -> tighten slightly
-                    soft_scale *= 0.95
-                    hard_scale *= 0.97
-                    adjust = True
-                    reason = f"Low false positive ratio {fp_ratio:.2f}" 
-                # Clamp scales
-                soft_scale = max(min_scale, min(max_scale, soft_scale))
-                hard_scale = max(min_scale, min(max_scale, hard_scale))
-                if adjust:
-                    risk.cfg.soft_immobility_s = base_soft_threshold * soft_scale * adaptive_soft_mult
-                    risk.cfg.hard_immobility_s = base_hard_threshold * hard_scale * adaptive_hard_mult
-                    print(f"🛠️ Adaptive tuning: soft={risk.cfg.soft_immobility_s:.1f}s hard={risk.cfg.hard_immobility_s:.1f}s (scales {soft_scale:.2f}/{hard_scale:.2f}) due to {reason}")
-                last_adapt_event_count = total_events
-
-            # Frame rate control
-            if use_camera:
+                else:
+                    frame_count += 1
+                    if current_time - last_debug >= idle_debug_interval:
+                        pir_status = pir_system.get_status() if pir_system else {"is_monitoring": False}
+                        print(f"💤 IDLE: frames={frame_count}, PIR monitoring={pir_status.get('is_monitoring', False)}")
+                        last_debug = current_time
+                # Periodic heartbeat (outside of event branch to ensure regularity)
+                if heartbeat_enabled:
+                    if (current_time - last_heartbeat) >= heartbeat_interval:
+                        uptime_s = int(current_time - start_time)
+                        hb_text = (
+                            f"✅ DuruOn heartbeat\n"
+                            f"uptime={uptime_s//3600}h{(uptime_s%3600)//60}m frames={frame_count} events={event_count} present={metrics.get('present')}\n"
+                            f"camera={'ok' if (cap and cap.isOpened()) else 'down'} pir={'on' if (pir_system and pir_system.is_monitoring) else 'idle'}"
+                        )
+                        notifier.send_text(hb_text)
+                        last_heartbeat = current_time
+            if use_camera and CV2_AVAILABLE:
                 sleep_time = max(0, 1.0/fps - 0.001)
                 if not monitoring_active:
-                    sleep_time *= 5  # Sleep longer when idle to save CPU
+                    sleep_time *= 5
                 time.sleep(sleep_time)
             else:
-                time.sleep(0.1 if monitoring_active else 1.0)  # Slower when idle
-
+                time.sleep(0.1 if monitoring_active else 1.0)
     except KeyboardInterrupt:
         print("🛑 Keyboard interrupt received")
     except Exception as e:
@@ -487,21 +584,21 @@ def run(config_path: str):
         raise
     finally:
         print("🛑 Shutting down DuruOn...")
-        
-        # Stop PIR system first
         if pir_system:
             pir_system.stop()
-        
-        # Stop LED system last (handles GPIO cleanup)
         if led_system:
             led_system.stop()
-            
-        # Release camera
         if cap:
             cap.release()
             print("📷 Camera released")
-            
-        print("✅ DuruOn shutdown complete")
+        # Clean PID file
+        try:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+        except Exception:
+            pass
+        uptime_total = int(time.time() - start_time)
+        print(f"✅ DuruOn shutdown complete (uptime={uptime_total//3600}h{(uptime_total%3600)//60}m events={event_count})")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

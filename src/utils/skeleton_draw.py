@@ -1,10 +1,22 @@
 
 from typing import Tuple
 import numpy as np
-import cv2
-from ..shared.pose import PoseResult, SKELETON_EDGES
+try:  # pragma: no cover
+    from ..shared.pose import PoseResult, SKELETON_EDGES  # type: ignore
+except Exception:
+    from shared.pose import PoseResult, SKELETON_EDGES  # type: ignore
+
+# Optional cv2 import (fallback will raise if used without cv2)
+try:  # pragma: no cover - simple import guard
+    import cv2  # type: ignore
+    _CV2_AVAILABLE = True
+except Exception:  # pragma: no cover
+    cv2 = None  # type: ignore
+    _CV2_AVAILABLE = False
 
 def render_skeleton_image(pose: PoseResult, out_size: Tuple[int,int]=(480,480)) -> bytes:
+    if not _CV2_AVAILABLE:
+        raise RuntimeError("cv2 not available - cannot render skeleton image")
     w, h = out_size
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
     def to_px(p): return (int(p[0]*w), int(p[1]*h))

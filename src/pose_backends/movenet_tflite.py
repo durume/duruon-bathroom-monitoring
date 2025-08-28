@@ -1,8 +1,18 @@
 
 import numpy as np
-import cv2, time
+import time
 from typing import Dict
-from ..shared.pose import PoseResult, COCO17
+try:  # pragma: no cover
+    import cv2  # type: ignore
+    _CV2_AVAILABLE = True
+except Exception:
+    cv2 = None  # type: ignore
+    _CV2_AVAILABLE = False
+
+try:  # pragma: no cover
+    from ..shared.pose import PoseResult, COCO17  # type: ignore
+except Exception:
+    from shared.pose import PoseResult, COCO17  # type: ignore
 
 try:
     import tflite_runtime.interpreter as tflite
@@ -36,6 +46,8 @@ class MoveNetSinglePose:
         return np.expand_dims(x, 0)
 
     def infer(self, bgr) -> PoseResult:
+        if not _CV2_AVAILABLE:
+            raise RuntimeError("cv2 not available - cannot run MoveNet inference")
         x = self._preprocess(bgr)
         self.interp.set_tensor(self.inp['index'], x)
         self.interp.invoke()

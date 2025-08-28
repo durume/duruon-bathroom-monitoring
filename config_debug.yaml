@@ -1,0 +1,74 @@
+# Debug / rapid-detection configuration for DuruOn (NOT for production)
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  angle_threshold_deg: 55
+  drop_threshold: 0.08          # lower to trigger easier on vertical movement
+  drop_window_s: 0.9
+  immobile_window_s: 4.0        # shorter motion averaging
+  immobile_motion_eps: 0.05
+  soft_immobility_s: 5.0        # fast soft alert
+  hard_immobility_s: 15.0       # faster escalation
+  fast_fall_immobility_s: 6.0   # confirm hard_fall quickly after drop
+  cooldown_s: 10.0              # short cooldown for testing multiple events
+  movement_tolerance_low_angle: 0.35
+  movement_tolerance_high_angle: 0.05
+  shower_mode_enabled: false
+  shower_duration_multiplier: 1.0
+  angle_change_threshold: 25.0
+  position_change_threshold: 0.12
+  # Lower keypoint confidence threshold (default 0.10). Try 0.05 for low light.
+  min_kp_confidence: 0.05
+
+pir_activation:
+  enabled: true
+  pir_pin: 24
+  debounce_time: 1.0
+  activation_grace_period: 0.3
+  auto_sleep_timeout: 120.0
+
+led_indicators:
+  enabled: true
+  green_pin: 18
+  blue_pin: 23
+  red_pin: 25
+
+telegram:
+  type: "telegram"
+
+# New logging tuning
+logging:
+  active_debug_interval_s: 20
+  idle_debug_interval_s: 120
+  presence_min_persist_s: 1.5
+  presence_min_log_gap_s: 2.0
+
+# Debug instrumentation
+debug:
+  save_frames: true
+  frame_dir: debug_frames
+  save_interval_s: 12
+  save_on_state_change: true
+  max_frames: 150
+  brightness_warn_interval_s: 60
+  risk_verbose: true
+  risk_verbose_interval_s: 5
+  risk_snapshot_every_s: 0      # set >0 to push anonymized pose snapshots periodically when present
+  keypoint_dump: true           # include weakest keypoints & hips/shoulders scores in risk debug
+  keypoint_dump_top_n: 6        # how many weakest to list
+  risk_verbose_compact: true    # shorter one-line risk debug
+
+# Alerting (reuse defaults, shorten repeat window for tests if needed)
+alerting:
+  heartbeat:
+    enabled: false

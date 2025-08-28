@@ -7,7 +7,8 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/opt/bathguard
 EnvironmentFile=/opt/bathguard/.env
-ExecStart=/opt/bathguard/venv/bin/python -m src.main --config /opt/bathguard/config.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bathguard/venv/bin/python -u -m src.main --config /opt/bathguard/config.yaml
 Restart=always
 RestartSec=5
 

@@ -4,11 +4,14 @@ camera:
   enabled: false
 risk:
   angle_threshold_deg: 65
-  cooldown_s: 300
-  drop_threshold: 0.25
-  drop_window_s: 0.7
-  immobile_motion_eps: 0.01
-  immobile_window_s: 4.0
-  soft_immobility_s: 120
+  drop_threshold: 0.20          # Slightly easier to detect mock fall
+  drop_window_s: 1.0
+  immobile_motion_eps: 0.02
+  immobile_window_s: 1.5        # Short averaging window for quick immobility
+  soft_immobility_s: 3.0        # Trigger soft immobility quickly
+  hard_immobility_s: 6.0        # Escalate to hard immobility
+  fast_fall_immobility_s: 2.5   # Fast escalation after detected drop
+  cooldown_s: 10                # Short cooldown so multiple events can be observed
+  confirm_grace_s: 1.0          # Quick confirmation window
 telegram:
   type: dummy

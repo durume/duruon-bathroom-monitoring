@@ -3,7 +3,10 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import math, time
 from datetime import datetime
-from ..shared.pose import PoseResult
+try:  # pragma: no cover
+    from ..shared.pose import PoseResult  # type: ignore
+except Exception:  # allow running without package context
+    from shared.pose import PoseResult  # type: ignore
 
 @dataclass
 class RiskConfig:
@@ -27,6 +30,8 @@ class RiskConfig:
     # Original enhanced detection parameters
     angle_change_threshold: float = 30.0
     position_change_threshold: float = 0.15
+    # Keypoint confidence gating (was hardcoded 0.1)
+    min_kp_confidence: float = 0.10
 
 class RiskEngine:
     def __init__(self, fps: int = 15, cfg: RiskConfig = None):
@@ -42,7 +47,9 @@ class RiskEngine:
 
     def _mid(self, a: str, b: str, kp: Dict[str, tuple]):
         pa, pb = kp.get(a), kp.get(b)
-        if not pa or not pb or pa[2] < 0.1 or pb[2] < 0.1: return None
+        thr = getattr(self.cfg, 'min_kp_confidence', 0.1)
+        if not pa or not pb or pa[2] < thr or pb[2] < thr:
+            return None
         return ((pa[0]+pb[0])/2.0, (pa[1]+pb[1])/2.0)
 
     # --- Helper methods (unified versions) ---

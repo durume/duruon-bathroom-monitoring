@@ -1,6 +1,7 @@
 numpy
-opencv-python-headless
 pyyaml
 requests
-# Prefer tflite-runtime; tensorflow-cpu is fallback
+# For camera + GUI preview on desktop you can switch to opencv-python.
+opencv-python-headless
+# Prefer lightweight tflite-runtime; user can manually install tensorflow if needed.
 tflite-runtime; python_version >= '3.7'

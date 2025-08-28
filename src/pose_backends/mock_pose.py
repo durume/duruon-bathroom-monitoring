@@ -1,7 +1,10 @@
 
 import time, itertools
 from typing import Iterator, Dict, Tuple, List
-from ..shared.pose import PoseResult, COCO17
+try:  # pragma: no cover
+    from ..shared.pose import PoseResult, COCO17  # type: ignore
+except Exception:
+    from shared.pose import PoseResult, COCO17  # type: ignore
 
 def _make_empty_kp() -> Dict[str, Tuple[float,float,float]]:
     return {name:(0.0,0.0,0.0) for name in COCO17}
@@ -52,9 +55,14 @@ def sequence_soft_immobility(fps: int = 15, still_s: float = 125.0) -> Iterator[
 class MockBackend:
     def __init__(self, seq: Iterator[PoseResult]):
         self.seq = seq
+        self._last_pose: PoseResult | None = None
     def infer(self, _frame=None) -> PoseResult:
         try:
-            return next(self.seq)
+            p = next(self.seq)
+            self._last_pose = p
+            return p
         except StopIteration:
-            # repeat last known pose
+            # After scripted sequence, hold last pose (simulate continued immobility)
+            if self._last_pose is not None:
+                return PoseResult(self._last_pose.keypoints, self._last_pose.score, time.time())
             return PoseResult({}, 0.0, time.time())
