@@ -85,6 +85,78 @@ venv/bin/python main_runner.py --config config.yaml
 Bot 생성: @BotFather → 토큰 → 봇에게 메시지 → `https://api.telegram.org/bot<TOKEN>/getUpdates` → `chat.id` 추출.
 
 ---
+## 4.1 실행 절차 (Step-by-Step)
+운영/테스트에 가장 자주 필요한 명령을 순서대로 정리했습니다.
+
+1. 설치 (코드 복사 + 가상환경 + 모델)
+```bash
+git clone https://github.com/your-username/duruon.git
+cd duruon
+./install.sh
+```
+2. 텔레그램 자격정보 작성 (`.env`)
+```bash
+sudo nano /opt/bathguard/.env
+```
+예시:
+```bash
+TG_BOT_TOKEN=123456:ABC...
+TG_CHAT_ID=999999999
+```
+3. (선택) 설정 수정
+```bash
+sudo nano /opt/bathguard/config.yaml
+```
+4. (선택) 하드웨어 없이 Mock 테스트
+```bash
+cd /opt/bathguard
+venv/bin/python -m src.main --config config.yaml --backend mock --camera.enabled false
+```
+5. 포그라운드 실행 (튜닝/로그 직관)
+```bash
+cd /opt/bathguard
+venv/bin/python -m src.main --config config.yaml
+```
+6. systemd 서비스 등록 (부팅 자동 시작)
+```bash
+sudo cp service/bathguard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bathguard
+```
+7. 모니터링 / 로그 확인
+```bash
+cd /opt/bathguard
+./monitor.sh health
+./monitor.sh live
+journalctl -u bathguard -n 50 --no-pager
+```
+8. 설정 변경 후 재시작
+```bash
+sudo systemctl restart bathguard
+```
+9. 중지 / 비활성화
+```bash
+sudo systemctl stop bathguard
+sudo systemctl disable bathguard
+```
+10. 단위 테스트 실행
+```bash
+cd /opt/bathguard
+venv/bin/python -m tests.run_all
+```
+
+선택 안내:
+- 실시간 튜닝 필요 → 5번 포그라운드
+- 상시 운영 → 6~8번 systemd
+- 하드웨어 미보유 → 4번 Mock
+
+서비스 문제 분석:
+```bash
+systemctl status bathguard --no-pager -l
+journalctl -u bathguard -b --no-pager | tail -n 80
+```
+
+---
 ## 5. 설정 개요 (`config.yaml`)
 ```yaml
 backend:

@@ -100,6 +100,78 @@ venv/bin/python main_runner.py --config config.yaml
 > If you do not yet have a bot: use @BotFather → create bot → copy token → send a message to the bot → open `https://api.telegram.org/bot<TOKEN>/getUpdates` → extract `chat.id`.
 
 ---
+## 4.1 How to Run (Step‑by‑Step)
+Essential execution workflow (manual run, then service operation):
+
+1. Install (copies into `/opt/bathguard`, creates venv, downloads model)
+```bash
+git clone https://github.com/your-username/duruon.git
+cd duruon
+./install.sh
+```
+2. Add Telegram credentials
+```bash
+sudo nano /opt/bathguard/.env
+```
+Example:
+```bash
+TG_BOT_TOKEN=123456:ABC...
+TG_CHAT_ID=999999999
+```
+3. (Optional) Edit config
+```bash
+sudo nano /opt/bathguard/config.yaml
+```
+4. (Optional) Dry run without hardware
+```bash
+cd /opt/bathguard
+venv/bin/python -m src.main --config config.yaml --backend mock --camera.enabled false
+```
+5. Foreground live run (interactive tuning)
+```bash
+cd /opt/bathguard
+venv/bin/python -m src.main --config config.yaml
+```
+6. Install as systemd service (auto start)
+```bash
+sudo cp service/bathguard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bathguard
+```
+7. Monitor & logs
+```bash
+cd /opt/bathguard
+./monitor.sh health
+./monitor.sh live
+journalctl -u bathguard -n 50 --no-pager
+```
+8. Apply config changes
+```bash
+sudo systemctl restart bathguard
+```
+9. Stop / disable
+```bash
+sudo systemctl stop bathguard
+sudo systemctl disable bathguard
+```
+10. Run unit tests
+```bash
+cd /opt/bathguard
+venv/bin/python -m tests.run_all
+```
+
+Decision helper:
+- Need quick experimentation? → Step 5 foreground.
+- Want resilience & auto boot? → Steps 6–8 systemd.
+- No hardware yet? → Step 4 mock.
+
+If the service fails, inspect:
+```bash
+systemctl status bathguard --no-pager -l
+journalctl -u bathguard -b --no-pager | tail -n 80
+```
+
+---
 ## 5. Configuration Overview
 
 Main file: `config.yaml`. Example fragments below (see comments):
