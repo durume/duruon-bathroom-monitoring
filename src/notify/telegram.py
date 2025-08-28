@@ -81,6 +81,30 @@ class TelegramNotifier:
                                 
                             self.send_text(response_text)
                             return callback_data
+                        # Support pause/resume inline buttons
+                        if callback_data == 'PAUSE_MON':
+                            self.send_text(f"⏸️ {user_name}님이 모니터링 일시중지를 요청했습니다.")
+                            return 'PAUSE_MON'
+                        if callback_data == 'RESUME_MON':
+                            self.send_text(f"▶️ {user_name}님이 모니터링 재개를 요청했습니다.")
+                            return 'RESUME_MON'
+                        # Plain text commands (simple bot commands)
+                        if "message" in update and "text" in update["message"]:
+                            msg = update["message"]
+                            text = (msg.get("text") or "").strip()
+                            user_name = msg.get("from", {}).get("first_name", "User")
+                            # Normalize commands (allow without leading / too)
+                            low = text.lower()
+                            if low in ("/status", "status"):
+                                return "CMD_STATUS"
+                            if low in ("/pause", "pause", "/monitor_stop", "monitor_stop"):
+                                self.send_text(f"⏸️ 모니터링 일시중지 요청 수신 ({user_name})")
+                                return "CMD_PAUSE"
+                            if low in ("/resume", "resume", "/monitor_start", "monitor_start"):
+                                self.send_text(f"▶️ 모니터링 재개 요청 수신 ({user_name})")
+                                return "CMD_RESUME"
+                            if low in ("/help", "help"):
+                                self.send_text("사용 가능 명령: /status, /pause, /resume")
         except Exception as e:
             # Silently continue - don't spam logs with connection errors
             pass

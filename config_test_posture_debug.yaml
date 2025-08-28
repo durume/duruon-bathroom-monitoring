@@ -1,0 +1,46 @@
+# Posture / bending debug config to surface immobility & slow posture changes quickly
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  angle_threshold_deg: 80          # Treat most bends as low posture
+  drop_threshold: 0.07             # Slightly easier to flag drop/position change
+  drop_window_s: 1.2               # Allow slower descent
+  immobile_window_s: 5.0           # Shorter averaging window
+  immobile_motion_eps: 0.04        # Stillness sensitivity
+  soft_immobility_s: 12            # Earlier soft immobility alert
+  hard_immobility_s: 25            # Earlier hard escalation fallback
+  fast_fall_immobility_s: 4        # Fast confirmation if drop candidate
+  cooldown_s: 40                   # Shorter cooldown for testing
+  confirm_grace_s: 2               # Quick grace for fall path
+  movement_tolerance_low_angle: 0.20
+  movement_tolerance_high_angle: 0.05
+  shower_mode_enabled: false
+  angle_change_threshold: 18.0     # Easier rapid angle flag
+  position_change_threshold: 0.09  # Easier displacement flag
+  min_kp_confidence: 0.05          # Accept lower-confidence hips/shoulders
+
+telegram:
+  type: "telegram"
+
+debug:
+  risk_verbose: true
+  risk_verbose_interval_s: 2
+  risk_verbose_compact: true
+  keypoint_dump: true
+  save_frames: true
+  frame_dir: debug_frames
+  save_interval_s: 10
+  save_on_state_change: true
+  max_frames: 80
+  brightness_warn_interval_s: 60
+  risk_snapshot_every_s: 0

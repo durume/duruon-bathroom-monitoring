@@ -95,6 +95,8 @@ venv/bin/python -m src.main --config config.yaml
 
 # Alternative simpler entry (adds import fallback)
 venv/bin/python main_runner.py --config config.yaml
+
+# (New) If a previous crash left LEDs on, `./run.sh` now auto-resets GPIO LEDs before launching.
 ```
 
 > If you do not yet have a bot: use @BotFather → create bot → copy token → send a message to the bot → open `https://api.telegram.org/bot<TOKEN>/getUpdates` → extract `chat.id`.
@@ -235,7 +237,10 @@ TG_CHAT_ID=999999999
 | Name | Purpose | Tune Up (>) | Tune Down (<) |
 |------|---------|-------------|---------------|
 | angle_threshold_deg | Angle below which posture considered low | Detect slower slides | Reduce false alarms while bending |
-| drop_threshold | Min vertical delta for fall | More sensitivity | Fewer false drops |
+| drop_threshold | Min vertical delta for fall detection | More sensitivity | Fewer false drops from walking |
+| **drop_window_s** | **Time window for sudden drop detection** | **Longer history analysis** | **Faster response but less context** |
+| angle_change_threshold | Min angle change to trigger drop detection | More sensitive to posture changes | Ignore normal movements |
+| position_change_threshold | Min position change to trigger drop detection | More sensitive to location shifts | Ignore walking/normal motion |
 | fast_fall_immobility_s | Window to confirm fast fall | Faster alerts | Safer against brief pauses |
 | soft_immobility_s | Soft stage delay | Later soft alerts | Earlier soft alerts |
 | hard_immobility_s | Hard escalation delay | Later escalation | Earlier escalation |
@@ -243,6 +248,24 @@ TG_CHAT_ID=999999999
 | movement_tolerance_low_angle | Lying allowed motion | More lenient | Stricter |
 | movement_tolerance_high_angle | Upright allowed motion | Fewer false immobility | Reduce misses |
 | shower_duration_multiplier | Extends thresholds during shower hours | Fewer shower false alerts | Faster detection while showering |
+
+### Drop Detection Window Explained
+
+**`drop_window_s`** is critical for sudden drop detection. It defines how far back in time the system looks to detect sudden changes:
+
+- **Purpose**: Compares current pose against historical poses within this time window
+- **Too Small** (< 2.0s): May not accumulate enough pose samples, causing detection to fail entirely
+- **Too Large** (> 5.0s): May dilute sudden changes with too much historical context  
+- **Recommended**: 2.0-4.0 seconds for most scenarios
+
+The system needs **at least 2 pose samples** within this window to perform drop detection. At 15 FPS, a 3.0-second window should capture ~45 frames, but filtering (pose confidence, keypoint availability) may reduce this number.
+
+**Detection Logic**:
+1. **Vertical Drop**: Hip position drops by ≥ `drop_threshold` (normalized screen coords)
+2. **Angle Change**: Torso angle changes by ≥ `angle_change_threshold` degrees  
+3. **Position Change**: Combined hip+shoulder movement ≥ `position_change_threshold`
+
+If **any** of these three conditions trigger within `drop_window_s`, it creates a "fall candidate" for further analysis.
 
 ---
 ## 6. How Detection Works (Beginner Explanation)
@@ -258,13 +281,15 @@ TG_CHAT_ID=999999999
 ---
 ## 7. Telegram Buttons
 
-| Label (KR) | English | Action |
-|------------|---------|--------|
-| 괜찮아요 | I'm OK | Acknowledge + clear alert |
-| 오탐 | False Alarm | Mark false → adaptive tuning input (future) |
-| 중지 | Stop | Graceful remote shutdown |
+Default (Korean) inline buttons used in alerts:
 
-To switch to English labels, edit button tuples in `src/main.py` (search for `buttons=[(`).
+| Label | Meaning | Action |
+|-------|---------|--------|
+| 괜찮아요 | I'm OK / Safe | Acknowledge & clear alert (stops repeats) |
+| 오탐지 | False Alarm | Mark as false (future adaptive tuning input) |
+| 앱중지 | Stop App | Gracefully stop monitoring process remotely |
+
+Change / localize: edit button tuples in `src/main.py` (search `buttons=[("괜찮아요"`).
 
 ---
 ## 8. Running Modes

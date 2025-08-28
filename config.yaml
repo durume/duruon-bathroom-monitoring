@@ -12,18 +12,20 @@ camera:
   fps: 15
 
 risk:
-  angle_threshold_deg: 55          # Slightly more permissive angle for horizontal/low posture
-  drop_threshold: 0.10             # Require a bit larger vertical change (reduce false drops)
-  drop_window_s: 0.9               # Short window for sudden movement
+  angle_threshold_deg: 50          # Practical threshold for bent-over/fall detection (50° from vertical)
+  drop_threshold: 0.05             # Very sensitive vertical drop threshold for slips  
+  drop_window_s: 3.0               # Longer window to accumulate enough samples for detection  
+  angle_change_threshold: 20.0     # Lower angle change threshold to catch gradual slips
+  position_change_threshold: 0.12  # More sensitive position change threshold
   immobile_window_s: 10.0          # Window for averaging motion
-  immobile_motion_eps: 0.05        # Base movement tolerance
-  soft_immobility_s: 30.0          # Soft alert after 30s immobile (no detected fall)
-  hard_immobility_s: 90.0          # Fallback hard escalation after prolonged immobility
-  fast_fall_immobility_s: 12.0     # Fast path: immobility duration needed AFTER a detected sudden drop to confirm hard_fall
-  cooldown_s: 120                  # 2 minute cooldown to reduce alert spam
+  immobile_motion_eps: 0.05        # Normal movement tolerance for motion detection
+  soft_immobility_s: 15.0          # Alert after 15s immobile for angles <50°
+  hard_immobility_s: 45.0          # Hard escalation after 45s immobility
+  fast_fall_immobility_s: 8.0      # Faster confirmation after detected fall
+  cooldown_s: 30                   # 30 second cooldown to allow testing
   # Enhanced shower-aware detection
-  movement_tolerance_low_angle: 0.50   # Very permissive tolerance to ensure alerts trigger
-  movement_tolerance_high_angle: 0.05  # Stricter when upright
+  movement_tolerance_low_angle: 0.12   # Normal tolerance for low angles
+  movement_tolerance_high_angle: 0.05  # Strict tolerance when upright
   shower_mode_enabled: true
   shower_start_hour: 6             # Shower hours start
   shower_end_hour: 22              # Shower hours end

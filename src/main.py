@@ -37,11 +37,21 @@ def load_config(path: str) -> dict:
 def make_backend(backend_cfg: dict):
     kind = backend_cfg.get("type", "movenet_tflite")
     if kind == "mock":
+        print("🧪 Using mock backend (no camera/model load)")
         return MockBackend(sequence_hard_fall())
     elif kind == "movenet_tflite":
         model_path = backend_cfg.get("model_path", "models/movenet_singlepose_lightning.tflite")
         threads = int(backend_cfg.get("num_threads", 3))
-        return MoveNetSinglePose(model_path, num_threads=threads)
+        start_load = time.time()
+        print(f"⏳ Loading MoveNet model: {model_path} (threads={threads}) ...")
+        try:
+            backend = MoveNetSinglePose(model_path, num_threads=threads)
+        except Exception as e:
+            print(f"💥 Failed to load MoveNet model: {e}")
+            raise
+        dur = time.time() - start_load
+        print(f"✅ MoveNet model loaded in {dur:.2f}s")
+        return backend
     else:
         raise ValueError(f"Unknown backend type: {kind}")
 
@@ -93,6 +103,32 @@ def make_notifier(cfg: dict):
 
 def run(config_path: str):
     cfg = load_config(config_path)
+    # Explicitly log which configuration file is being used and summarize key risk params
+    try:
+        rcfg = cfg.get("risk", {}) if isinstance(cfg, dict) else {}
+        print(f"🛠  Loaded config file: {config_path}")
+        # Summarize most relevant thresholds that influence fall detection
+        summary_parts = []
+        def _gp(k, default):
+            v = rcfg.get(k, default)
+            summary_parts.append(f"{k}={v}")
+        _gp("angle_threshold_deg", 50.0)
+        _gp("drop_threshold", 0.15)
+        _gp("drop_window_s", 1.0)
+        _gp("immobile_window_s", 10.0)
+        _gp("soft_immobility_s", 30.0)
+        _gp("hard_immobility_s", 60.0)
+        if "fast_fall_immobility_s" in rcfg:
+            _gp("fast_fall_immobility_s", 12.0)
+        if "angle_change_threshold" in rcfg:
+            _gp("angle_change_threshold", 30.0)
+        if "position_change_threshold" in rcfg:
+            _gp("position_change_threshold", 0.15)
+        if "min_kp_confidence" in rcfg:
+            _gp("min_kp_confidence", 0.10)
+        print("🧪 RiskConfig: " + ", ".join(summary_parts))
+    except Exception as e:
+        print(f"⚠️  Could not summarize risk config: {e}")
     backend = make_backend(cfg.get("backend", {}))
     notifier = make_notifier(cfg.get("telegram", {}))
 
@@ -233,6 +269,10 @@ def run(config_path: str):
     monitoring_active = pir_system is None
     frame_count = 0
     last_debug = 0
+    # Telegram callback polling setup (for ACK / stop buttons)
+    last_callback_poll = 0.0
+    callback_poll_interval = 1.0  # seconds
+    remote_paused = False  # Telegram command-based pause state
     # Throttle repetitive presence combination logs
     last_presence_combo = None  # ('present','pir_motion') tuple
     last_presence_log_time = 0.0
@@ -270,6 +310,11 @@ def run(config_path: str):
     last_saved_state_combo = None
     last_risk_verbose = 0.0
     last_risk_snapshot = 0.0
+
+    # Presence smoothing: tolerate brief pose loss before clearing presence
+    presence_grace_frames = int(debug_cfg.get("presence_grace_frames", 5))  # consecutive missing frames tolerated
+    missing_frames = 0
+    smoothed_present = False
     if debug_save_frames:
         try:
             os.makedirs(debug_frame_dir, exist_ok=True)
@@ -364,7 +409,8 @@ def run(config_path: str):
                     cap = None
                     now = time.time()
                     if monitoring_active and (now - last_camera_error_notify) >= error_notify_interval_s:
-                        notifier.send_text("⚠️ Camera disconnected or no frames. Will keep retrying.")
+                        # Localized camera error notice
+                        notifier.send_text("⚠️ 카메라에서 프레임을 읽지 못했습니다. 재연결을 계속 시도합니다.")
                         last_camera_error_notify = now
                     if led_system:
                         led_system.set_system_status("error")
@@ -373,7 +419,7 @@ def run(config_path: str):
             else:
                 frame = None
 
-            if monitoring_active:
+            if monitoring_active and not remote_paused:
                 # Optional brightness / debug frame saving BEFORE inference
                 if use_camera and CV2_AVAILABLE and frame is not None:
                     try:
@@ -415,7 +461,18 @@ def run(config_path: str):
                     continue
                 metrics = risk.update(pose)
                 frame_count += 1
-                present = metrics.get("present")
+                raw_present = metrics.get("present")
+                # Update smoothed presence with grace for intermittent keypoint loss
+                if raw_present:
+                    missing_frames = 0  # reset counter
+                    if not smoothed_present:
+                        smoothed_present = True
+                else:
+                    missing_frames += 1
+                    if missing_frames >= presence_grace_frames:
+                        if smoothed_present:
+                            smoothed_present = False
+                present = smoothed_present
                 pir_motion = pir_system._read_pir() if pir_system else False
 
                 # Risk debug instrumentation
@@ -439,11 +496,13 @@ def run(config_path: str):
                             except Exception:
                                 pass
                         if risk_verbose_compact:
-                            # Compact form (avoid terminal wrapping)
+                            # Compact form with key motion deltas (vertical dy & total angle change) + fallback flag
                             print(
-                                "🧪 RISK DBG: pres=%s evt=%s ang=%.0f° drop=%s imm=%s sc=%.2f%s" % (
-                                    metrics.get('present'), metrics.get('event'), metrics.get('torso_angle', -1.0),
-                                    metrics.get('sudden_drop'), metrics.get('immobile'), pose.score, kp_extra
+                                "🧪 RISK DBG: pres=%s raw=%s evt=%s ang=%.0f° drop=%s imm=%s dy=%.3f dAngT=%.1f pos=%.3f cmp[d:%s a:%s p:%s] miss=%d/%d fb=%s sc=%.2f%s" % (
+                                    present, raw_present, metrics.get('event'), metrics.get('torso_angle', -1.0),
+                                    metrics.get('sudden_drop'), metrics.get('immobile'), metrics.get('vertical_dy', 0.0), metrics.get('angle_change_total', 0.0), metrics.get('position_change_total',0.0),
+                                    metrics.get('drop_component_dy'), metrics.get('drop_component_angle'), metrics.get('drop_component_pos'),
+                                    missing_frames, presence_grace_frames, metrics.get('fallback_used'), pose.score, kp_extra
                                 )
                             )
                         else:
@@ -537,12 +596,27 @@ def run(config_path: str):
                                 led_system.set_alert_status("emergency")
                             else:
                                 led_system.set_alert_status("soft")
+                        # Event name localization
+                        event_display_map = {
+                            'hard_fall': '낙상(확정)',
+                            'soft_immobility': '장시간 무동작(1단계)',
+                            'hard_immobility': '장시간 무동작(2단계)',
+                        }
+                        event_ko = event_display_map.get(event, event)
+                        # Localized alert text with control hint
+                        control_hint = "제어: /pause 로 일시중지, /resume 재개 또는 버튼 사용"
                         text = (
-                            f"🚨 DuruOn alert ({event})\n"
-                            f"torso≈{metrics['torso_angle']:.0f}° drop={metrics['sudden_drop']} immobile={metrics['immobile']}\n"
-                            f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
+                            f"🚨 DuruOn 경보: {event_ko}\n"
+                            f"자세각≈{metrics['torso_angle']:.0f}° | 급강하={metrics['sudden_drop']} | 무동작={metrics['immobile']}\n"
+                            f"시간: {time.strftime('%Y-%m-%d %H:%M:%S')}\n{control_hint}"
                         )
-                        notifier.send_text(text, buttons=[("I'm OK","ACK_OK"),("False","ACK_FALSE")])
+                        # Assemble dynamic buttons (include pause/resume toggle)
+                        dyn_buttons = [("괜찮아요","ACK_OK"),("오탐지","ACK_FALSE"),("앱중지","STOP_APP")]
+                        if 'remote_paused' in locals() and locals()['remote_paused']:
+                            dyn_buttons.insert(2,("재개","RESUME_MON"))
+                        else:
+                            dyn_buttons.insert(2,("일시중지","PAUSE_MON"))
+                        notifier.send_text(text, buttons=dyn_buttons)
                         try:
                             img = render_skeleton_image(pose)
                             notifier.send_photo(img, caption="Anonymized pose snapshot")
@@ -562,19 +636,66 @@ def run(config_path: str):
                     if (current_time - last_heartbeat) >= heartbeat_interval:
                         uptime_s = int(current_time - start_time)
                         hb_text = (
-                            f"✅ DuruOn heartbeat\n"
-                            f"uptime={uptime_s//3600}h{(uptime_s%3600)//60}m frames={frame_count} events={event_count} present={metrics.get('present')}\n"
-                            f"camera={'ok' if (cap and cap.isOpened()) else 'down'} pir={'on' if (pir_system and pir_system.is_monitoring) else 'idle'}"
+                            f"✅ DuruOn 상태 점검 (Heartbeat)\n"
+                            f"업타임={uptime_s//3600}h{(uptime_s%3600)//60}m 프레임={frame_count} 이벤트={event_count} 존재={metrics.get('present')}\n"
+                            f"카메라={'정상' if (cap and cap.isOpened()) else '중단'} PIR={'활성' if (pir_system and pir_system.is_monitoring) else '대기'}"
                         )
                         notifier.send_text(hb_text)
                         last_heartbeat = current_time
             if use_camera and CV2_AVAILABLE:
                 sleep_time = max(0, 1.0/fps - 0.001)
-                if not monitoring_active:
+                if not monitoring_active or remote_paused:
                     sleep_time *= 5
                 time.sleep(sleep_time)
             else:
-                time.sleep(0.1 if monitoring_active else 1.0)
+                time.sleep(0.1 if (monitoring_active and not remote_paused) else 1.0)
+
+            # Poll Telegram callbacks periodically (non-blocking control)
+            now_cb = time.time()
+            if (now_cb - last_callback_poll) >= callback_poll_interval:
+                last_callback_poll = now_cb
+                try:
+                    cb_res = getattr(notifier, 'check_callbacks', lambda: None)()
+                    if cb_res == 'STOP_APP':
+                        notifier.send_text("🛑 애플리케이션이 사용자 요청(앱중지)으로 종료됩니다.")
+                        running = False
+                        continue
+                    if cb_res in ('PAUSE_MON','CMD_PAUSE'):
+                        if not remote_paused:
+                            remote_paused = True
+                            if led_system:
+                                led_system.set_system_status('idle')
+                                led_system.set_pir_status('clear')
+                            notifier.send_text("⏸️ 모니터링이 일시중지되었습니다. (/resume 또는 재개 버튼)")
+                    elif cb_res in ('RESUME_MON','CMD_RESUME'):
+                        if remote_paused:
+                            remote_paused = False
+                            if led_system:
+                                led_system.set_system_status('active') if monitoring_active else led_system.set_system_status('idle')
+                            notifier.send_text("▶️ 모니터링이 재개되었습니다.")
+                    if cb_res == 'CMD_PAUSE':
+                        if not remote_paused:
+                            remote_paused = True
+                            if led_system:
+                                led_system.set_system_status('idle')
+                                led_system.set_pir_status('clear')
+                            notifier.send_text("⏸️ 원격 명령으로 모니터링이 일시중지되었습니다. (/resume 으로 재개)")
+                    elif cb_res == 'CMD_RESUME':
+                        if remote_paused:
+                            remote_paused = False
+                            if led_system:
+                                led_system.set_system_status('active') if monitoring_active else led_system.set_system_status('idle')
+                            notifier.send_text("▶️ 모니터링이 재개되었습니다.")
+                    elif cb_res == 'CMD_STATUS':
+                        try:
+                            cam_ok = (cap and cap.isOpened()) if cap else False
+                            pir_state = pir_system.is_monitoring if pir_system else False
+                            notifier.send_text(
+                                f"ℹ️ 상태:\n활성={monitoring_active and not remote_paused} (pause={remote_paused})\n카메라={'정상' if cam_ok else '중단'} PIR={'활성' if pir_state else '대기'}\n프레임={frame_count} 이벤트={event_count}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
     except KeyboardInterrupt:
         print("🛑 Keyboard interrupt received")
     except Exception as e:

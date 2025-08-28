@@ -1,0 +1,51 @@
+# Highly sensitive fall detection tuning (aggressive) for diagnostics
+# Use ONLY for controlled testing to verify sudden drop pathway.
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  # Posture / drop sensitivity
+  angle_threshold_deg: 75          # Treat more postures as low (easier fall candidate)
+  drop_threshold: 0.05             # Smaller vertical displacement triggers component
+  drop_window_s: 1.5               # Wider window to accumulate dy
+  immobile_window_s: 5.0           # Faster immobility averaging
+  immobile_motion_eps: 0.05        # Motion tolerance baseline
+  fast_fall_immobility_s: 3.0      # Fast confirm after drop
+  soft_immobility_s: 15.0          # Short soft stage
+  hard_immobility_s: 35.0          # Earlier escalation
+  cooldown_s: 40                   # Short cooldown for repeat tests
+  confirm_grace_s: 2.0             # Time to observe immobility after candidate
+  angle_change_threshold: 12.0     # Rapid angle component easier
+  position_change_threshold: 0.05  # Displacement component easier
+  movement_tolerance_low_angle: 0.60  # Allow some post-fall micro motion
+  movement_tolerance_high_angle: 0.07 # Slightly stricter upright
+  shower_mode_enabled: false
+  min_kp_confidence: 0.04          # Accept lower confidence hips/shoulders
+  extreme_low_angle_deg: 10.0      # Fallback: consider <=10° as near-flat
+  extreme_low_angle_fast_confirm_s: 3.0  # Immobile duration to confirm fallback hard_fall
+
+telegram:
+  type: "telegram"
+
+# Extra debug section
+debug:
+  risk_verbose: true
+  risk_verbose_compact: true
+  risk_verbose_interval_s: 2
+  keypoint_dump: true
+  save_frames: true
+  frame_dir: debug_frames
+  save_interval_s: 12
+  save_on_state_change: true
+  max_frames: 120
+  risk_snapshot_every_s: 0
+  presence_grace_frames: 6   # tolerate brief keypoint dropouts

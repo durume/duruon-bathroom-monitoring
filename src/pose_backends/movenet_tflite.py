@@ -59,5 +59,12 @@ class MoveNetSinglePose:
             kp = {COCO17[i]:(float(y[0,i,1]), float(y[0,i,0]), float(y[0,i,2])) for i in range(17)}
         else:
             kp = {}
+        # Joint-specific confidence filtering
+        for name in list(kp.keys()):
+            c = kp[name][2]
+            if name.endswith(('ankle','wrist')) and c < 0.10:
+                del kp[name]
+            elif name.endswith('knee') and c < 0.06:
+                del kp[name]
         score = float(np.mean([v[2] for v in kp.values()])) if kp else 0.0
         return PoseResult(kp, score, time.time())

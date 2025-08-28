@@ -1,0 +1,47 @@
+# Debug / rapid-trigger config for forcing fall & immobility alerts quickly
+backend:
+  type: "movenet_tflite"
+  model_path: "models/movenet_singlepose_lightning.tflite"
+  num_threads: 3
+
+camera:
+  enabled: true
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+
+risk:
+  angle_threshold_deg: 80          # Treat more angles as "horizontal risky"
+  drop_threshold: 0.05             # Easier to classify a drop
+  drop_window_s: 1.2               # Slightly longer window to catch slower descent
+  immobile_window_s: 3.0           # Short history for motion averaging
+  immobile_motion_eps: 0.03        # Sensitive to stillness
+  soft_immobility_s: 10            # Quick soft alert
+  hard_immobility_s: 15            # Quick hard escalation fallback
+  fast_fall_immobility_s: 3        # After a detected drop, only 3s immobile needed
+  cooldown_s: 30                   # Short cooldown between alerts
+  confirm_grace_s: 2               # Grace window to confirm fall pattern
+  movement_tolerance_low_angle: 0.15
+  movement_tolerance_high_angle: 0.05
+  shower_mode_enabled: false       # Disable multiplier during tests
+  angle_change_threshold: 20.0     # Easier rapid angle flag
+  position_change_threshold: 0.10  # Easier displacement flag
+  min_kp_confidence: 0.05          # Allow lower-confidence hips/shoulders
+
+telegram:
+  type: "telegram"
+
+debug:
+  risk_verbose: true
+  risk_verbose_compact: true
+  keypoint_dump: true
+  keypoint_dump_top_n: 6
+  save_frames: true
+  frame_dir: debug_frames
+  save_interval_s: 8
+  save_on_state_change: true
+  max_frames: 60
+  brightness_warn_interval_s: 45
+  risk_verbose_interval_s: 2
+  risk_snapshot_every_s: 0         # Off (can enable if Telegram snapshots desired)
