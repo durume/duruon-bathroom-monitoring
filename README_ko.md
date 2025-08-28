@@ -67,8 +67,8 @@ DuruOn은 Raspberry Pi 등 소형 리눅스 보드에서 실행되며:
 ---
 ## 4. 빠른 시작 (입문용)
 ```bash
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 ./install.sh                     # /opt/bathguard 구성
 sudo nano /opt/bathguard/.env    # TG_BOT_TOKEN / TG_CHAT_ID 입력
 
@@ -90,8 +90,8 @@ Bot 생성: @BotFather → 토큰 → 봇에게 메시지 → `https://api.teleg
 
 1. 설치 (코드 복사 + 가상환경 + 모델)
 ```bash
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 ./install.sh
 ```
 2. 텔레그램 자격정보 작성 (`.env`)
@@ -358,8 +358,8 @@ MIT License (LICENSE 참조).
 ## 📦 설치 (Raspberry Pi OS 64bit)
 ```bash
 # 저장소 가져오기
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 
 # 설치 스크립트 실행 (시스템 의존성 + venv + 모델)
 ./install.sh

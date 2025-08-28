@@ -77,8 +77,8 @@ Core modules live under `src/`:
 
 ```bash
 # 1. Clone
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 
 # 2. Install (creates /opt/bathguard, virtualenv, downloads model)
 ./install.sh
@@ -105,8 +105,8 @@ Essential execution workflow (manual run, then service operation):
 
 1. Install (copies into `/opt/bathguard`, creates venv, downloads model)
 ```bash
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 ./install.sh
 ```
 2. Add Telegram credentials
@@ -427,8 +427,8 @@ Camera:
 ### Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 
 # Run installation script
 ./install.sh
@@ -509,8 +509,8 @@ To switch labels back to English, edit button texts in `src/main.py` (search for
 
 ### Setting up Development Environment
 ```bash
-git clone https://github.com/your-username/duruon.git
-cd duruon
+git clone https://github.com/durume/duruon-bathroom-monitoring.git
+cd duruon-bathroom-monitoring
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
